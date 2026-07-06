@@ -1,12 +1,18 @@
 import requests
 
 def get_new_tokens():
-    print("🔍 SCANNING NEW PAIRS (ALPHA MODE)")
+    print("🔍 SCANNING ALPHA TOKENS (STABLE MODE)")
 
-    url = "https://api.dexscreener.com/latest/dex/pairs/solana"
+    url = "https://api.dexscreener.com/latest/dex/search?q=raydium"
 
     try:
         res = requests.get(url, timeout=10)
+
+        # SAFETY CHECK
+        if res.status_code != 200:
+            print("API ERROR STATUS:", res.status_code)
+            return
+
         data = res.json()
 
         pairs = data.get("pairs", [])
