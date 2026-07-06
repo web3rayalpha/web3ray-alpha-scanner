@@ -1,7 +1,7 @@
-import requests
+ import requests
 
 def get_new_tokens():
-    print("🔍 Starting scan...")
+    print("🔍 Starting scan safely...")
 
     url = "https://api.dexscreener.com/latest/dex/search?q=solana"
 
@@ -9,15 +9,28 @@ def get_new_tokens():
         res = requests.get(url, timeout=10)
         data = res.json()
 
-        print("RAW DATA KEYS:", data.keys())
-
         pairs = data.get("pairs", [])
 
-        print("TOTAL PAIRS FOUND:", len(pairs))
+        print(f"TOTAL PAIRS FOUND: {len(pairs)}")
 
-        for i, pair in enumerate(pairs[:5]):
+        count = 0
+
+        for pair in pairs:
             base = pair.get("baseToken", {})
-            print(i, base.get("symbol"), pair.get("priceUsd"))
+            symbol = base.get("symbol")
+            price = pair.get("priceUsd")
+
+            # ignore noise
+            if not symbol or symbol == "SOL":
+                continue
+
+            print(f"{symbol} | ${price}")
+
+            count += 1
+            if count >= 10:
+                break
+
+        print("WEB3RAY SCAN COMPLETE")
 
     except Exception as e:
-        print("ERROR:", e)
+        print("SCAN ERROR:", str(e))
