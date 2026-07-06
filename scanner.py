@@ -1,7 +1,7 @@
 import requests
 
 def get_new_tokens():
-    print("🔍 Checking Solana tokens...")
+    print("🔍 Starting scan...")
 
     url = "https://api.dexscreener.com/latest/dex/search?q=solana"
 
@@ -9,14 +9,15 @@ def get_new_tokens():
         res = requests.get(url, timeout=10)
         data = res.json()
 
+        print("RAW DATA KEYS:", data.keys())
+
         pairs = data.get("pairs", [])
 
-        for pair in pairs[:5]:
-            base = pair.get("baseToken", {})
-            symbol = base.get("symbol")
-            price = pair.get("priceUsd")
+        print("TOTAL PAIRS FOUND:", len(pairs))
 
-            print(f"{symbol} - ${price}")
+        for i, pair in enumerate(pairs[:5]):
+            base = pair.get("baseToken", {})
+            print(i, base.get("symbol"), pair.get("priceUsd"))
 
     except Exception as e:
-        print("Error:", e)
+        print("ERROR:", e)
