@@ -2,13 +2,8 @@ import requests
 import os
 from telegram import Bot
 
-def get_new_tokens():
+def get_new_tokens(bot=None, chat_id=None):
     print("🔍 RUNNING ALPHA SIGNAL SCANNER")
-
-    token = os.getenv("BOT_TOKEN")
-    chat_id = os.getenv("CHAT_ID")
-
-    bot = Bot(token=token) if token and chat_id else None
 
     url = "https://api.dexscreener.com/latest/dex/search?q=raydium"
 
@@ -31,7 +26,6 @@ def get_new_tokens():
             if not symbol or symbol == "SOL":
                 continue
 
-            # simple alpha filter
             if liquidity < 200000:
                 continue
 
@@ -39,7 +33,8 @@ def get_new_tokens():
 
             print(msg)
 
-            if bot:
+            # SAFE TELEGRAM SEND (SYNC FIX)
+            if bot and chat_id:
                 try:
                     bot.send_message(chat_id=int(chat_id), text=msg)
                 except Exception as e:
