@@ -1,7 +1,14 @@
 import requests
+import os
+from telegram import Bot
 
 def get_new_tokens():
     print("🔍 Scanning Solana alpha opportunities...")
+
+    token = os.getenv("BOT_TOKEN")
+    chat_id = os.getenv("CHAT_ID")
+
+    bot = Bot(token=token) if token and chat_id else None
 
     url = "https://api.dexscreener.com/latest/dex/search?q=solana"
 
@@ -13,28 +20,31 @@ def get_new_tokens():
 
         print(f"TOTAL PAIRS FOUND: {len(pairs)}")
 
-        count = 0
+        sent = 0
 
-        for pair in pairs:
+        for pair in pairs[:20]:  # LIMIT FIRST
             base = pair.get("baseToken", {})
             symbol = base.get("symbol")
             price = pair.get("priceUsd")
-            liquidity = pair.get("liquidity", {}).get("usd", 0)
 
             if not symbol:
                 continue
 
-            # stricter alpha filter
             if symbol in ["SOL", "USDC", "USDT"]:
                 continue
 
-            if liquidity and liquidity < 5000:
-                continue
+            msg = f"🚨 TOKEN FOUND\n\nToken: {symbol}\nPrice: ${price}"
 
-            print(f"🚨 ALPHA TOKEN: {symbol} | ${price} | LIQ: ${liquidity}")
+            print(msg)
 
-            count += 1
-            if count >= 10:
+            if bot:
+                try:
+                    bot.send_message(chat_id=int(chat_id), text=msg)
+                except Exception as e:
+                    print("Telegram error:", e)
+
+            sent += 1
+            if sent >= 5:
                 break
 
         print("SCAN COMPLETE")
