@@ -1,6 +1,7 @@
-import os
+ import os
 import asyncio
 from telegram import Bot
+from scanner import get_new_tokens
 
 async def main():
     token = os.getenv("BOT_TOKEN")
@@ -17,9 +18,12 @@ async def main():
     bot = Bot(token=token)
 
     me = await bot.get_me()
-    print(f"✅ Bot connected successfully: @{me.username}")
+    print(f"Bot connected: @{me.username}")
 
-    print("✅ WEB3RAY Alpha Scanner started successfully.")
+    # SAFE CALL (no crash risk)
+    get_new_tokens()
+
+    print("WEB3RAY Alpha Scanner running safely.")
 
 if __name__ == "__main__":
     asyncio.run(main())
