@@ -19,9 +19,7 @@ async def main():
     me = await bot.get_me()
     print(f"✅ Bot connected successfully: @{me.username}")
 
-
-
-     print("✅ WEB3RAY Alpha Scanner started successfully.")
+    print("✅ WEB3RAY Alpha Scanner started successfully.")
 
 if __name__ == "__main__":
     asyncio.run(main())
