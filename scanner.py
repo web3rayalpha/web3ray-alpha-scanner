@@ -1,7 +1,7 @@
 import requests
 
 def get_new_tokens():
-    print("🔍 Scanner running safely...")
+    print("🔍 Scanning for alpha tokens...")
 
     url = "https://api.dexscreener.com/latest/dex/search?q=solana"
 
@@ -13,14 +13,24 @@ def get_new_tokens():
 
         print(f"TOTAL PAIRS FOUND: {len(pairs)}")
 
-        for pair in pairs[:5]:
+        count = 0
+
+        for pair in pairs:
             base = pair.get("baseToken", {})
             symbol = base.get("symbol")
             price = pair.get("priceUsd")
 
-            print(f"{symbol} | ${price}")
+            # FILTER OUT NOISE
+            if not symbol or symbol == "SOL":
+                continue
 
-        print("SCAN COMPLETE")
+            print(f"🚨 TOKEN: {symbol} | PRICE: ${price}")
+
+            count += 1
+            if count >= 10:
+                break
+
+        print("ALPHA SCAN COMPLETE")
 
     except Exception as e:
         print("ERROR:", str(e))
