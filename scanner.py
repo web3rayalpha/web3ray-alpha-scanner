@@ -1,13 +1,9 @@
 import requests
 import os
 from telegram import Bot
-import asyncio
 
-def get_new_tokens():
+def get_new_tokens(bot: Bot, chat_id: int):
     print("🔍 Starting scan safely...")
-
-    token = os.getenv("BOT_TOKEN")
-    chat_id = os.getenv("CHAT_ID")
 
     url = "https://api.dexscreener.com/latest/dex/search?q=solana"
 
@@ -19,22 +15,20 @@ def get_new_tokens():
 
         print(f"TOTAL PAIRS FOUND: {len(pairs)}")
 
-        for pair in pairs[:5]:
+        sent = False
+
+        for pair in pairs[:10]:
             base = pair.get("baseToken", {})
             symbol = base.get("symbol")
             price = pair.get("priceUsd")
 
             print(f"{symbol} | ${price}")
 
-            # send ONE test alert
-            if token and chat_id and symbol and symbol != "SOL":
+            if symbol and symbol != "SOL" and not sent:
                 message = f"🚨 WEB3RAY ALERT\n\nToken: {symbol}\nPrice: ${price}"
 
-                try:
-                    bot = Bot(token=token)
-                    asyncio.run(bot.send_message(chat_id=int(chat_id), text=message))
-                except Exception as e:
-                    print("Telegram error:", e)
+                bot.send_message(chat_id=chat_id, text=message)
+                sent = True
 
         print("SCAN COMPLETE")
 
