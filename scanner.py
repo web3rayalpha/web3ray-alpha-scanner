@@ -20,17 +20,16 @@ def get_new_tokens():
             symbol = base.get("symbol")
             price = pair.get("priceUsd")
 
-            # FILTER OUT NOISE
-            if not symbol or symbol == "SOL":
+            if not symbol:
                 continue
 
-            print(f"🚨 TOKEN: {symbol} | PRICE: ${price}")
+            print(f"{symbol} | ${price}")
 
             count += 1
             if count >= 10:
                 break
 
-        print("ALPHA SCAN COMPLETE")
+        print("SCAN COMPLETE")
 
     except Exception as e:
         print("ERROR:", str(e))
