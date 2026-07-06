@@ -1,4 +1,4 @@
- import os
+import os
 import asyncio
 from telegram import Bot
 from scanner import get_new_tokens
@@ -20,7 +20,6 @@ async def main():
     me = await bot.get_me()
     print(f"Bot connected: @{me.username}")
 
-    # SAFE CALL (no crash risk)
     get_new_tokens()
 
     print("WEB3RAY Alpha Scanner running safely.")
