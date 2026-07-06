@@ -7,22 +7,17 @@ async def main():
     token = os.getenv("BOT_TOKEN")
     chat_id = os.getenv("CHAT_ID")
 
-    if not token:
-        print("BOT_TOKEN not found!")
-        return
+    bot = Bot(token=token) if token and chat_id else None
 
-    if not chat_id:
-        print("CHAT_ID not found!")
-        return
+    if bot:
+        me = await bot.get_me()
+        print(f"Bot connected: @{me.username}")
 
-    bot = Bot(token=token)
+    while True:
+        get_new_tokens()
 
-    me = await bot.get_me()
-    print(f"Bot connected: @{me.username}")
-
-    get_new_tokens()
-
-    print("WEB3RAY Alpha Scanner running safely.")
+        print("WAITING 30s BEFORE NEXT SCAN...\n")
+        await asyncio.sleep(30)
 
 if __name__ == "__main__":
     asyncio.run(main())
