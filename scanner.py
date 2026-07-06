@@ -1,4 +1,4 @@
- import requests
+import requests
 
 def get_new_tokens():
     print("🔍 Starting scan safely...")
@@ -20,7 +20,6 @@ def get_new_tokens():
             symbol = base.get("symbol")
             price = pair.get("priceUsd")
 
-            # ignore noise
             if not symbol or symbol == "SOL":
                 continue
 
