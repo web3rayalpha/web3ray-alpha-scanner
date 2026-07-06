@@ -1,6 +1,13 @@
 import requests
 
-def get_new_tokens(bot, chat_id):
+def send_telegram(token, chat_id, text):
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    try:
+        requests.post(url, data={"chat_id": chat_id, "text": text})
+    except Exception as e:
+        print("Telegram error:", e)
+
+def get_new_tokens(token, chat_id):
     print("🔍 SCANNING ALPHA TOKENS")
 
     url = "https://api.dexscreener.com/latest/dex/search?q=raydium"
@@ -24,7 +31,6 @@ def get_new_tokens(bot, chat_id):
             if not symbol:
                 continue
 
-            # filter noise
             if symbol in ["SOL", "USDC", "USDT"]:
                 continue
 
@@ -39,8 +45,7 @@ def get_new_tokens(bot, chat_id):
             )
 
             print(msg)
-
-            bot.send_message(chat_id=int(chat_id), text=msg)
+            send_telegram(token, chat_id, msg)
 
             sent += 1
             if sent >= 3:
