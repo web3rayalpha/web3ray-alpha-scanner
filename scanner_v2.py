@@ -1,5 +1,4 @@
 import requests
-import time
 
 seen_tokens = set()
 
@@ -31,9 +30,14 @@ def get_new_tokens(token, chat_id):
                 continue
 
             liquidity = pair.get("liquidity", {}).get("usd", 0)
-            volume = pair.get("volume", {}).get("h24", 0)
+
+            volume_5m = pair.get("volume", {}).get("m5", 0)
+            volume_1h = pair.get("volume", {}).get("h1", 0)
+            volume_24h = pair.get("volume", {}).get("h24", 0)
+
             fdv = pair.get("fdv", 0)
             url = pair.get("url")
+            pair_created = pair.get("pairCreatedAt")
 
             if liquidity < 5000:
                 continue
@@ -44,7 +48,7 @@ def get_new_tokens(token, chat_id):
             seen_tokens.add(address)
 
             message = f"""
-🚨 WEB3RAY ALPHA V2
+🚀 WEB3RAY ALPHA V2
 
 🪙 Token: {symbol}
 
@@ -52,13 +56,18 @@ def get_new_tokens(token, chat_id):
 {address}
 
 💰 FDV:
-${fdv}
+${fdv:,.0f}
 
 💧 Liquidity:
-${liquidity}
+${liquidity:,.0f}
 
-📈 Volume 24h:
-${volume}
+📈 Volume
+5m : ${volume_5m:,.0f}
+1h : ${volume_1h:,.0f}
+24h: ${volume_24h:,.0f}
+
+🕒 Pair Created:
+{pair_created}
 
 🔗 Chart:
 {url}
