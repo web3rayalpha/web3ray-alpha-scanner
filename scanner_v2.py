@@ -1,8 +1,13 @@
 import requests
+import time
 
 seen_tokens = set()
 
 URL = "https://api.dexscreener.com/latest/dex/search?q=raydium"
+
+MAX_AGE_MINUTES = 15
+MIN_LIQUIDITY = 5000
+MAX_FDV = 100000
 
 
 def get_new_tokens(token, chat_id):
@@ -10,6 +15,7 @@ def get_new_tokens(token, chat_id):
 
     try:
         response = requests.get(URL, timeout=10)
+        response.raise_for_status()
         data = response.json()
 
         pairs = data.get("pairs", [])
@@ -29,28 +35,46 @@ def get_new_tokens(token, chat_id):
             if address in seen_tokens:
                 continue
 
-            liquidity = pair.get("liquidity", {}).get("usd", 0)
+            liquidity = float(pair.get("liquidity", {}).get("usd") or 0)
 
-            volume_5m = pair.get("volume", {}).get("m5", 0)
-            volume_1h = pair.get("volume", {}).get("h1", 0)
-            volume_24h = pair.get("volume", {}).get("h24", 0)
+            volume = pair.get("volume", {})
+            volume_5m = float(volume.get("m5") or 0)
+            volume_1h = float(volume.get("h1") or 0)
+            volume_24h = float(volume.get("h24") or 0)
 
-            fdv = pair.get("fdv", 0)
-            url = pair.get("url")
+            fdv = float(pair.get("fdv") or 0)
+
+            chart = pair.get("url", "N/A")
+
             pair_created = pair.get("pairCreatedAt")
 
-            if liquidity < 5000:
+            age_minutes = None
+
+            if pair_created:
+                age_minutes = (time.time() * 1000 - pair_created) / 60000
+
+            if age_minutes is not None and age_minutes > MAX_AGE_MINUTES:
                 continue
 
-            if fdv and fdv > 100000:
+            if liquidity < MIN_LIQUIDITY:
+                continue
+
+            if fdv and fdv > MAX_FDV:
                 continue
 
             seen_tokens.add(address)
 
-            message = f"""
-🚀 WEB3RAY ALPHA V2
+            age_text = (
+                f"{age_minutes:.1f} min"
+                if age_minutes is not None
+                else "Unknown"
+            )
+
+            message = f"""🚀 WEB3RAY ALPHA V2
 
 🪙 Token: {symbol}
+
+⏱ Age: {age_text}
 
 📄 CA:
 {address}
@@ -66,11 +90,8 @@ ${liquidity:,.0f}
 1h : ${volume_1h:,.0f}
 24h: ${volume_24h:,.0f}
 
-🕒 Pair Created:
-{pair_created}
-
 🔗 Chart:
-{url}
+{chart}
 """
 
             telegram_url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -80,7 +101,8 @@ ${liquidity:,.0f}
                 data={
                     "chat_id": chat_id,
                     "text": message
-                }
+                },
+                timeout=10
             )
 
             print(message)
