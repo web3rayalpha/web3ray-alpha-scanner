@@ -5,7 +5,7 @@ seen_tokens = set()
 
 URL = "https://api.dexscreener.com/latest/dex/search?q=raydium"
 
-MAX_AGE_MINUTES = 15
+MAX_AGE_MINUTES = 60
 MIN_LIQUIDITY = 5000
 MAX_FDV = 100000
 
