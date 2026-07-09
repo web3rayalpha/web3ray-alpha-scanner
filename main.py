@@ -1,6 +1,6 @@
 import os
 import time
-from scanner import get_new_tokens
+from scanner_v2 import get_new_tokens
 
 def main():
     token = os.getenv("BOT_TOKEN")
