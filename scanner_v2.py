@@ -5,9 +5,9 @@ seen_tokens = set()
 
 URL = "https://api.dexscreener.com/latest/dex/search?q=raydium"
 
-MAX_AGE_MINUTES = 60
-MIN_LIQUIDITY = 5000
-MAX_FDV = 100000
+MAX_AGE_MINUTES = 180
+MIN_LIQUIDITY = 1000
+MAX_FDV = 300000
 
 
 def get_new_tokens(token, chat_id):
