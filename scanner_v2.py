@@ -50,21 +50,19 @@ def get_new_tokens(token, chat_id):
             pair_created = pair.get("pairCreatedAt")
 
             age_minutes = None
-
             if pair_created:
                 age_minutes = (time.time() * 1000 - pair_created) / 60000
 
-            
-                      if age_minutes is not None and age_minutes > MAX_AGE_MINUTES:
-                print(f"SKIP {symbol}: age {age_minutes:.1f} min")
+            if age_minutes is not None and age_minutes > MAX_AGE_MINUTES:
+                print(f"SKIP {symbol}: age {age_minutes:.1f}")
                 continue
 
             if liquidity < MIN_LIQUIDITY:
-                print(f"SKIP {symbol}: liquidity ${liquidity}")
+                print(f"SKIP {symbol}: liquidity {liquidity}")
                 continue
 
-            if fdv and fdv > MAX_FDV:
-                print(f"SKIP {symbol}: FDV ${fdv}")
+            if fdv > MAX_FDV:
+                print(f"SKIP {symbol}: fdv {fdv}")
                 continue
 
             seen_tokens.add(address)
@@ -110,7 +108,7 @@ ${liquidity:,.0f}
                 timeout=10
             )
 
-            print(message)
+            print(f"SENT: {symbol}")
 
             sent += 1
 
