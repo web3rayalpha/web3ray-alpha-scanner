@@ -19,6 +19,7 @@ def get_new_tokens(token, chat_id):
         data = response.json()
 
         pairs = data.get("pairs", [])
+print("TOTAL PAIRS FOUND:", len(pairs))
 
         sent = 0
 
