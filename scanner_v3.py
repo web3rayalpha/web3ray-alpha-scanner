@@ -6,15 +6,13 @@ seen_tokens = set()
 
 URL = "https://public-api.birdeye.so/defi/v2/tokens/new_listing"
 
-API_KEY = "PASTE_YOUR_BIRDEYE_API_KEY_HERE"
-
 MIN_LIQUIDITY = 1000
 
 
-def get_new_tokens(token, chat_id):
+def get_new_tokens(token, chat_id, api_key):
 
     headers = {
-        "X-API-KEY": API_KEY,
+        "X-API-KEY": api_key,
         "accept": "application/json",
         "x-chain": "solana"
     }
@@ -74,7 +72,7 @@ def get_new_tokens(token, chat_id):
 
                 age = f"{mins} min"
 
-            except:
+            except Exception:
                 pass
 
             chart = f"https://birdeye.so/token/{address}?chain=solana"
@@ -90,12 +88,10 @@ def get_new_tokens(token, chat_id):
 💧 Liquidity:
 ${liquidity:,.0f}
 
-📄 Contract
-
+📄 Contract:
 {address}
 
-📈 Chart
-
+📈 Chart:
 {chart}
 """
 
@@ -108,7 +104,7 @@ ${liquidity:,.0f}
                 timeout=10
             )
 
-            print("SENT", symbol)
+            print(f"SENT {symbol}")
 
             seen_tokens.add(address)
 
