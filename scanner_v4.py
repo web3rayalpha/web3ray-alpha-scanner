@@ -40,8 +40,7 @@ def get_new_tokens(token, chat_id, api_key):
     }
 
     params = {
-        "limit": 20,
-        "meme_platform_enabled": "true"
+        "limit": 20
     }
 
     try:
@@ -53,6 +52,9 @@ def get_new_tokens(token, chat_id, api_key):
             timeout=15
         )
 
+        print("STATUS:", r.status_code)
+        print("BODY:", r.text)
+
         r.raise_for_status()
 
         items = r.json().get("data", {}).get("items", [])
@@ -63,10 +65,7 @@ def get_new_tokens(token, chat_id, api_key):
 
             address = t.get("address")
 
-            if not address:
-                continue
-
-            if address in seen_tokens:
+            if not address or address in seen_tokens:
                 continue
 
             symbol = t.get("symbol", "Unknown")
@@ -81,19 +80,12 @@ def get_new_tokens(token, chat_id, api_key):
 
             if listed:
                 try:
-                    dt = datetime.fromisoformat(
-                        listed.replace("Z", "+00:00")
-                    )
-
+                    dt = datetime.fromisoformat(listed.replace("Z", "+00:00"))
                     age_minutes = int(
-                        (
-                            datetime.now(timezone.utc) - dt
-                        ).total_seconds() / 60
+                        (datetime.now(timezone.utc) - dt).total_seconds() / 60
                     )
-
                     age_text = f"{age_minutes} min"
-
-                except Exception:
+                except:
                     pass
 
             score = calculate_score(liquidity, age_minutes)
@@ -102,12 +94,9 @@ def get_new_tokens(token, chat_id, api_key):
                 continue
 
             if score < MIN_SCORE:
-                print(f"SKIP {symbol} SCORE {score}")
                 continue
 
-            chart = (
-                f"https://birdeye.so/token/{address}?chain=solana"
-            )
+            chart = f"https://birdeye.so/token/{address}?chain=solana"
 
             message = f"""🚀 WEB3RAY V4
 
@@ -138,9 +127,9 @@ ${liquidity:,.0f}
                 timeout=10
             )
 
-            print("SENT", symbol)
-
             seen_tokens.add(address)
+
+            print("SENT", symbol)
 
             time.sleep(1)
 
