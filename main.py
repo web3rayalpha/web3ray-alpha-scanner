@@ -1,6 +1,7 @@
 import os
 import time
-from  scanner_v4 import get_new_tokens
+from scanner_v4 import get_new_tokens
+
 
 def main():
     token = os.getenv("BOT_TOKEN")
@@ -11,11 +12,12 @@ def main():
         print("Missing BOT_TOKEN, CHAT_ID or BIRDEYE_API_KEY")
         return
 
-    print("WEB3RAY V3 STARTED")
+    print("WEB3RAY V4 STARTED")
 
     while True:
         get_new_tokens(token, chat_id, api_key)
         time.sleep(30)
+
 
 if __name__ == "__main__":
     main()
