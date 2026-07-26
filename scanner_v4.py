@@ -6,8 +6,6 @@ seen_tokens = set()
 
 URL = "https://public-api.birdeye.so/defi/v2/tokens/new_listing"
 
-API_KEY = "PASTE_YOUR_BIRDEYE_API_KEY_HERE"
-
 MIN_LIQUIDITY = 1000
 MIN_SCORE = 80
 
@@ -33,10 +31,10 @@ def calculate_score(liquidity, age_minutes):
     return score
 
 
-def get_new_tokens(token, chat_id):
+def get_new_tokens(token, chat_id, api_key):
 
     headers = {
-        "X-API-KEY": API_KEY,
+        "X-API-KEY": api_key,
         "accept": "application/json",
         "x-chain": "solana"
     }
@@ -48,7 +46,13 @@ def get_new_tokens(token, chat_id):
 
     try:
 
-        r = requests.get(URL, headers=headers, params=params, timeout=15)
+        r = requests.get(
+            URL,
+            headers=headers,
+            params=params,
+            timeout=15
+        )
+
         r.raise_for_status()
 
         items = r.json().get("data", {}).get("items", [])
@@ -59,7 +63,10 @@ def get_new_tokens(token, chat_id):
 
             address = t.get("address")
 
-            if not address or address in seen_tokens:
+            if not address:
+                continue
+
+            if address in seen_tokens:
                 continue
 
             symbol = t.get("symbol", "Unknown")
@@ -72,16 +79,22 @@ def get_new_tokens(token, chat_id):
             age_minutes = None
             age_text = "Unknown"
 
-            try:
-                dt = datetime.fromisoformat(
-                    listed.replace("Z", "+00:00")
-                )
-                age_minutes = int(
-                    (datetime.now(timezone.utc) - dt).total_seconds() / 60
-                )
-                age_text = f"{age_minutes} min"
-            except:
-                pass
+            if listed:
+                try:
+                    dt = datetime.fromisoformat(
+                        listed.replace("Z", "+00:00")
+                    )
+
+                    age_minutes = int(
+                        (
+                            datetime.now(timezone.utc) - dt
+                        ).total_seconds() / 60
+                    )
+
+                    age_text = f"{age_minutes} min"
+
+                except Exception:
+                    pass
 
             score = calculate_score(liquidity, age_minutes)
 
@@ -92,7 +105,9 @@ def get_new_tokens(token, chat_id):
                 print(f"SKIP {symbol} SCORE {score}")
                 continue
 
-            chart = f"https://birdeye.so/token/{address}?chain=solana"
+            chart = (
+                f"https://birdeye.so/token/{address}?chain=solana"
+            )
 
             message = f"""🚀 WEB3RAY V4
 
