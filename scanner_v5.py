@@ -5,9 +5,9 @@ seen_tokens = set()
 
 URL = "https://api.dexscreener.com/latest/dex/search?q=raydium"
 
-MIN_LIQUIDITY = 5000
-MAX_FDV = 1000000
-MIN_VOLUME_5M = 1000
+MIN_LIQUIDITY = 1000
+MAX_FDV = 5000000
+MIN_VOLUME_5M = 100
 
 
 def alpha_score(liquidity, fdv, volume5m):
@@ -19,11 +19,15 @@ def alpha_score(liquidity, fdv, volume5m):
         score += 30
     elif liquidity >= 5000:
         score += 20
+    elif liquidity >= 1000:
+        score += 10
 
     if fdv <= 500000:
         score += 30
     elif fdv <= 1000000:
         score += 20
+    elif fdv <= 5000000:
+        score += 10
 
     if volume5m >= 10000:
         score += 30
@@ -31,6 +35,8 @@ def alpha_score(liquidity, fdv, volume5m):
         score += 20
     elif volume5m >= 1000:
         score += 10
+    elif volume5m >= 100:
+        score += 5
 
     return score
 
@@ -58,6 +64,12 @@ def get_new_tokens(token, chat_id):
             fdv = float(pair.get("fdv") or 0)
             volume5m = float(pair.get("volume", {}).get("m5") or 0)
 
+            score = alpha_score(liquidity, fdv, volume5m)
+
+            print(
+                f"{symbol} | LQ=${liquidity:.0f} | FDV=${fdv:.0f} | V5=${volume5m:.0f} | SCORE={score}"
+            )
+
             if liquidity < MIN_LIQUIDITY:
                 continue
 
@@ -67,9 +79,7 @@ def get_new_tokens(token, chat_id):
             if volume5m < MIN_VOLUME_5M:
                 continue
 
-            score = alpha_score(liquidity, fdv, volume5m)
-
-            if score < 70:
+            if score < 40:
                 continue
 
             chart = pair.get("url", "")
@@ -96,11 +106,11 @@ def get_new_tokens(token, chat_id):
                 timeout=10
             )
 
-            seen_tokens.add(address)
-
             print("SENT", symbol)
+
+            seen_tokens.add(address)
 
             time.sleep(1)
 
     except Exception as e:
-        print(e)
+        print("ERROR:", e)
