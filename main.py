@@ -14,11 +14,7 @@ def main():
     print("WEB3RAY V5 STARTED")
 
     while True:
-        try:
-            get_new_tokens(token, chat_id)
-        except Exception as e:
-            print("ERROR:", e)
-
+        get_new_tokens(token, chat_id)
         time.sleep(30)
 
 
