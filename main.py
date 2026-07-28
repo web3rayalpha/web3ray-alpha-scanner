@@ -1,35 +1,25 @@
 import os
 import time
-from scanner_v6 import get_new_pools
+from scanner_v5 import get_new_tokens
 
 
 def main():
     token = os.getenv("BOT_TOKEN")
     chat_id = os.getenv("CHAT_ID")
-    api_key = os.getenv("COINGECKO_API_KEY")
 
-    if not token:
-        raise Exception("BOT_TOKEN missing")
+    if not token or not chat_id:
+        print("Missing BOT_TOKEN or CHAT_ID")
+        return
 
-    if not chat_id:
-        raise Exception("CHAT_ID missing")
-
-    if not api_key:
-        raise Exception("COINGECKO_API_KEY missing")
-
-    print("WEB3RAY V6 STARTED")
+    print("WEB3RAY V5 STARTED")
 
     while True:
         try:
-            get_new_pools(
-                token=token,
-                chat_id=chat_id,
-                api_key=api_key
-            )
+            get_new_tokens(token, chat_id)
         except Exception as e:
             print("ERROR:", e)
 
-        time.sleep(60)
+        time.sleep(30)
 
 
 if __name__ == "__main__":
