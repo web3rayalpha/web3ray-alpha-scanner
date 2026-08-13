@@ -7,14 +7,23 @@ def main():
     token = os.getenv("BOT_TOKEN")
     chat_id = os.getenv("CHAT_ID")
 
-    if not token or not chat_id:
-        print("Missing BOT_TOKEN or CHAT_ID")
-        return
+    if not token:
+        raise Exception("BOT_TOKEN missing")
+
+    if not chat_id:
+        raise Exception("CHAT_ID missing")
 
     print("WEB3RAY V5 STARTED")
 
     while True:
-        get_new_tokens(token, chat_id)
+        try:
+            get_new_tokens(
+                token=token,
+                chat_id=chat_id
+            )
+        except Exception as e:
+            print("ERROR:", e)
+
         time.sleep(30)
 
 
