@@ -1,5 +1,4 @@
 import os
-import time
 from scanner_v5 import get_new_tokens
 
 
@@ -15,16 +14,10 @@ def main():
 
     print("WEB3RAY V5 STARTED")
 
-    while True:
-        try:
-            get_new_tokens(
-                token=token,
-                chat_id=chat_id
-            )
-        except Exception as e:
-            print("ERROR:", e)
-
-        time.sleep(30)
+    get_new_tokens(
+        token=token,
+        chat_id=chat_id
+    )
 
 
 if __name__ == "__main__":
