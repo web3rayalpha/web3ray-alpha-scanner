@@ -1,5 +1,5 @@
 import os
-from scanner_v5 import get_new_tokens
+from scanner_v6 import get_new_tokens
 
 
 def main():
@@ -12,7 +12,7 @@ def main():
     if not chat_id:
         raise Exception("CHAT_ID missing")
 
-    print("WEB3RAY V5 STARTED")
+    print("WEB3RAY V6 STARTED")
 
     get_new_tokens(
         token=token,
