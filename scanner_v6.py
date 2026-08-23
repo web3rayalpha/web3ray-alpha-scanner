@@ -1,56 +1,93 @@
 import requests
 import time
+from datetime import datetime, timezone
 
 URL = "https://api.dexscreener.com/latest/dex/search?q=raydium"
 
-# V6 filters
-MIN_MARKET_CAP = 5000
-MAX_MARKET_CAP = 150000
-MIN_LIQUIDITY = 1000
-MIN_VOLUME_5M = 100
-MAX_FDV = 5000000
-MIN_SCORE = 30
+# =========================
+# V7 — EARLY ENTRY FILTERS
+# =========================
+
+MIN_MARKET_CAP = 5_000
+MAX_MARKET_CAP = 50_000
+
+MIN_LIQUIDITY = 2_000
+MIN_VOLUME_5M = 300
+
+MAX_PAIR_AGE_MINUTES = 30
+
+MIN_SCORE = 55
 
 seen_tokens = set()
 
 
-def alpha_score(market_cap, liquidity, fdv, volume5m):
+def get_pair_age_minutes(pair):
+    created = pair.get("pairCreatedAt")
+
+    if not created:
+        return 999999
+
+    try:
+        created_seconds = float(created) / 1000
+        now = datetime.now(timezone.utc).timestamp()
+        return (now - created_seconds) / 60
+    except:
+        return 999999
+
+
+def alpha_score(market_cap, liquidity, volume5m, age_minutes):
     score = 0
 
-    # Market cap
-    if 5000 <= market_cap <= 25000:
+    # =========================
+    # MARKET CAP — MOST IMPORTANT
+    # =========================
+
+    if market_cap <= 15_000:
+        score += 35
+    elif market_cap <= 30_000:
         score += 30
-    elif market_cap <= 50000:
+    elif market_cap <= 50_000:
+        score += 20
+
+    # =========================
+    # PAIR AGE — VERY IMPORTANT
+    # =========================
+
+    if age_minutes <= 5:
+        score += 30
+    elif age_minutes <= 10:
         score += 25
-    elif market_cap <= 100000:
+    elif age_minutes <= 20:
         score += 20
-    elif market_cap <= 150000:
+    elif age_minutes <= 30:
         score += 10
 
-    # Liquidity
-    if liquidity >= 50000:
-        score += 30
-    elif liquidity >= 20000:
-        score += 25
-    elif liquidity >= 5000:
+    # =========================
+    # LIQUIDITY
+    # =========================
+
+    if liquidity >= 20_000:
         score += 20
-    elif liquidity >= 1000:
+    elif liquidity >= 10_000:
+        score += 17
+    elif liquidity >= 5_000:
+        score += 14
+    elif liquidity >= 2_000:
         score += 10
 
-    # Volume 5m
-    if volume5m >= 10000:
-        score += 30
-    elif volume5m >= 5000:
-        score += 20
-    elif volume5m >= 1000:
-        score += 10
-    elif volume5m >= 100:
-        score += 5
+    # =========================
+    # 5M VOLUME
+    # =========================
 
-    # FDV
-    if fdv <= 500000:
+    if volume5m >= 10_000:
+        score += 15
+    elif volume5m >= 5_000:
+        score += 13
+    elif volume5m >= 1_000:
         score += 10
-    elif fdv <= 1000000:
+    elif volume5m >= 500:
+        score += 7
+    elif volume5m >= 300:
         score += 5
 
     return min(score, 100)
@@ -59,6 +96,7 @@ def alpha_score(market_cap, liquidity, fdv, volume5m):
 def get_new_tokens(token, chat_id):
 
     try:
+
         response = requests.get(URL, timeout=15)
         response.raise_for_status()
 
@@ -80,29 +118,28 @@ def get_new_tokens(token, chat_id):
             if address in seen_tokens:
                 continue
 
-            symbol = base_token.get("symbol", "UNKNOWN")
+            symbol = base_token.get("symbol", "Unknown")
 
-            # IMPORTANT:
-            # Use MARKET CAP, not FDV, for the MC shown in alerts.
+            # =========================
+            # GET DATA
+            # =========================
+
             market_cap = float(pair.get("marketCap") or 0)
 
             liquidity = float(
                 pair.get("liquidity", {}).get("usd") or 0
             )
 
-            fdv = float(pair.get("fdv") or 0)
-
             volume5m = float(
                 pair.get("volume", {}).get("m5") or 0
             )
 
-            pair_url = pair.get("url", "")
+            age_minutes = get_pair_age_minutes(pair)
 
-            # Ignore pairs without real MC data
-            if market_cap <= 0:
-                continue
+            # =========================
+            # EARLY ENTRY FILTER
+            # =========================
 
-            # Filters
             if market_cap < MIN_MARKET_CAP:
                 continue
 
@@ -115,29 +152,35 @@ def get_new_tokens(token, chat_id):
             if volume5m < MIN_VOLUME_5M:
                 continue
 
-            if fdv > MAX_FDV:
+            if age_minutes > MAX_PAIR_AGE_MINUTES:
                 continue
+
+            # =========================
+            # SCORE
+            # =========================
 
             score = alpha_score(
                 market_cap,
                 liquidity,
-                fdv,
-                volume5m
+                volume5m,
+                age_minutes
             )
 
             print(
                 f"{symbol} | "
                 f"MC=${market_cap:.0f} | "
                 f"LQ=${liquidity:.0f} | "
-                f"FDV=${fdv:.0f} | "
                 f"V5=${volume5m:.0f} | "
+                f"AGE={age_minutes:.1f}m | "
                 f"SCORE={score}"
             )
 
             if score < MIN_SCORE:
                 continue
 
-            message = f"""🚀 WEB3RAY V6
+            chart = pair.get("url", "")
+
+            message = f"""🚀 WEB3RAY V7 — EARLY ALPHA
 
 ⭐ Alpha Score: {score}/100
 
@@ -145,37 +188,34 @@ def get_new_tokens(token, chat_id):
 
 📊 Market Cap: ${market_cap:,.0f}
 💧 Liquidity: ${liquidity:,.0f}
-💰 FDV: ${fdv:,.0f}
 📈 Volume 5m: ${volume5m:,.0f}
+⏱️ Pair Age: {age_minutes:.1f} min
 
-🔗 {pair_url}
+🔥 EARLY ENTRY CANDIDATE
+
+🔗 {chart}
 """
 
             result = requests.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
                 data={
                     "chat_id": chat_id,
-                    "text": message,
-                    "disable_web_page_preview": False
+                    "text": message
                 },
                 timeout=10
             )
 
             result.raise_for_status()
 
-            print(f"SENT {symbol} | MC=${market_cap:.0f}")
+            print("SENT", symbol)
 
             seen_tokens.add(address)
-            alerts_sent += 1
 
-            # Prevent Telegram spam
-            if alerts_sent >= 10:
-                break
+            alerts_sent += 1
 
             time.sleep(1)
 
-        print(f"V6 FINISHED — {alerts_sent} ALERT(S) SENT")
+        print(f"V7 FINISHED — {alerts_sent} ALERT(S) SENT")
 
     except Exception as e:
         print("ERROR:", e)
-        raise
