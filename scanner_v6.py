@@ -9,7 +9,7 @@ URL = "https://api.dexscreener.com/latest/dex/search?q=raydium"
 # =========================
 
 MIN_MARKET_CAP = 5000
-MAX_MARKET_CAP = 150000
+MAX_MARKET_CAP = 25000
 
 MIN_LIQUIDITY = 500
 MIN_VOLUME_5M = 100
