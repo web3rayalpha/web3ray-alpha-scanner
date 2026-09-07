@@ -2,15 +2,24 @@ name: Web3Ray Alpha Scanner
 
 on:
   workflow_dispatch:
+
   schedule:
     - cron: "*/5 * * * *"
 
+concurrency:
+  group: web3ray-scanner
+  cancel-in-progress: true
+
 jobs:
+
   scan:
+
     runs-on: ubuntu-latest
+
     timeout-minutes: 6
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
