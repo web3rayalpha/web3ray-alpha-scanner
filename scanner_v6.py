@@ -1,83 +1,125 @@
-import requests
+  import requests
 import time
 from datetime import datetime, timezone
+
 
 # ============================================================
 # WEB3RAY V11 — EARLY RUNNER SCANNER
 # ============================================================
 #
-# Goal:
-# Find VERY early Solana/Raydium tokens showing real momentum.
+# Purpose:
+# Find very early Solana/Raydium tokens showing real momentum.
 #
-# V11 changes:
-# - Rejects heavy 5m dumps
+# V11:
+# - Rejects heavy dumps
 # - Rejects weak buy pressure
-# - Tighter MC range for FIRST SIGHT
-# - Rewards accelerating MC/volume
-# - Separates FIRST SIGHT from MOMENTUM
-# - Avoids alerting tokens that are already too late
-# - Keeps state during the GitHub Actions run
+# - Focuses first-sight alerts below $100K MC
+# - Tracks tokens between scans
+# - Detects MC acceleration
+# - Detects volume acceleration
+# - Sends Telegram alerts
+# - Compatible with existing main.py
 #
 # ============================================================
 
 
-PROFILES_URL = "https://api.dexscreener.com/token-profiles/latest/v1"
-TOKENS_URL = "https://api.dexscreener.com/tokens/v1/solana/{}"
+PROFILES_URL = (
+    "https://api.dexscreener.com/token-profiles/latest/v1"
+)
+
+TOKENS_URL = (
+    "https://api.dexscreener.com/tokens/v1/solana/{}"
+)
 
 
 # ============================================================
-# TARGET RANGE
+# SETTINGS
 # ============================================================
 
 MIN_MARKET_CAP = 5_000
 
-# First-sight target.
-# We do NOT want $180k tokens showing up as "early".
 MAX_FIRST_SIGHT_MC = 100_000
 
-# Absolute upper limit for momentum tracking.
 MAX_TRACKING_MC = 250_000
 
 MIN_LIQUIDITY = 1_000
 
 MAX_PAIR_AGE_MINUTES = 60
 
-
-# ============================================================
-# HARD QUALITY FILTERS
-# ============================================================
-
-# Do not alert a token dumping harder than this.
-MAX_5M_DROP = -15
-
-# Minimum buy pressure.
-MIN_BUY_PRESSURE = 55
-
-# Minimum 5m volume.
 MIN_VOLUME_5M = 100
 
-# Minimum score.
+MIN_BUY_PRESSURE = 55
+
+MAX_5M_DROP = -15
+
 MIN_FIRST_SIGHT_SCORE = 60
+
 MIN_MOMENTUM_SCORE = 65
 
 
 # ============================================================
-# RUN SETTINGS
+# GITHUB ACTIONS RUNTIME
 # ============================================================
 
-# GitHub Actions keeps this process alive for about 4 minutes.
 RUN_SECONDS = 240
 
-# Check roughly every 45 seconds.
 SCAN_INTERVAL_SECONDS = 45
 
 
 # ============================================================
-# STATE
+# MEMORY DURING ONE RUN
 # ============================================================
 
 watchlist = {}
+
 alerted_tokens = set()
+
+
+# ============================================================
+# HTTP SESSION
+# ============================================================
+
+session = requests.Session()
+
+session.headers.update({
+    "User-Agent": "Web3Ray-Alpha-Scanner/11.0"
+})
+
+
+# ============================================================
+# SAFE FLOAT
+# ============================================================
+
+def safe_float(value, default=0.0):
+
+    try:
+
+        if value is None:
+            return default
+
+        return float(value)
+
+    except Exception:
+
+        return default
+
+
+# ============================================================
+# SAFE INT
+# ============================================================
+
+def safe_int(value, default=0):
+
+    try:
+
+        if value is None:
+            return default
+
+        return int(value)
+
+    except Exception:
+
+        return default
 
 
 # ============================================================
@@ -93,17 +135,20 @@ def get_age_minutes(pair):
 
     try:
 
-        created_seconds = float(created_at) / 1000
+        created_seconds = (
+            float(created_at) / 1000
+        )
 
         now = datetime.now(
             timezone.utc
         ).timestamp()
 
-        age = (
-            now - created_seconds
-        ) / 60
-
-        return max(0, age)
+        return max(
+            0,
+            (
+                now - created_seconds
+            ) / 60
+        )
 
     except Exception:
 
@@ -111,28 +156,58 @@ def get_age_minutes(pair):
 
 
 # ============================================================
-# DISCOVERY
+# BUY PRESSURE
+# ============================================================
+
+def get_buy_pressure(
+    buys,
+    sells
+):
+
+    total = buys + sells
+
+    if total <= 0:
+        return 0.0
+
+    return (
+        buys / total
+    ) * 100
+
+
+# ============================================================
+# DISCOVER LATEST PROFILES
 # ============================================================
 
 def get_latest_profiles():
 
-    response = requests.get(
-        PROFILES_URL,
-        timeout=15
-    )
+    try:
 
-    response.raise_for_status()
+        response = session.get(
+            PROFILES_URL,
+            timeout=15
+        )
 
-    data = response.json()
+        response.raise_for_status()
 
-    if not isinstance(data, list):
+        data = response.json()
+
+        if not isinstance(data, list):
+            return []
+
+        return data
+
+    except Exception as e:
+
+        print(
+            "PROFILE ERROR: "
+            f"{type(e).__name__}: {e}"
+        )
+
         return []
-
-    return data
 
 
 # ============================================================
-# GET TOKEN PAIRS
+# GET PAIRS FOR TOKEN ADDRESSES
 # ============================================================
 
 def get_pairs(addresses):
@@ -152,13 +227,16 @@ def get_pairs(addresses):
             start:start + 30
         ]
 
+        if not batch:
+            continue
+
         url = TOKENS_URL.format(
             ",".join(batch)
         )
 
         try:
 
-            response = requests.get(
+            response = session.get(
                 url,
                 timeout=20
             )
@@ -174,32 +252,70 @@ def get_pairs(addresses):
         except Exception as e:
 
             print(
-                f"PAIR REQUEST ERROR: "
+                "PAIR REQUEST ERROR: "
                 f"{type(e).__name__}: {e}"
             )
 
-        time.sleep(0.3)
+        time.sleep(0.25)
 
     return results
 
 
 # ============================================================
-# BUY PRESSURE
+# FIND BEST RAYDIUM PAIR PER TOKEN
 # ============================================================
 
-def get_buy_pressure(
-    buys,
-    sells
-):
+def select_raydium_pairs(pairs):
 
-    total = buys + sells
+    selected = {}
 
-    if total <= 0:
-        return 0
+    for pair in pairs:
 
-    return (
-        buys / total
-    ) * 100
+        if pair.get("chainId") != "solana":
+            continue
+
+        if pair.get("dexId") != "raydium":
+            continue
+
+        base = pair.get(
+            "baseToken",
+            {}
+        )
+
+        address = base.get("address")
+
+        if not address:
+            continue
+
+        liquidity = safe_float(
+            pair.get(
+                "liquidity",
+                {}
+            ).get("usd")
+        )
+
+        existing = selected.get(address)
+
+        if existing is None:
+
+            selected[address] = pair
+
+            continue
+
+        existing_liquidity = safe_float(
+            existing.get(
+                "liquidity",
+                {}
+            ).get("usd")
+        )
+
+        if liquidity > existing_liquidity:
+
+            selected[address] = pair
+
+    return list(
+        selected.values()
+    )
 
 
 # ============================================================
@@ -222,9 +338,9 @@ def calculate_score(
     score = 0
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # MARKET CAP
-    # ========================================================
+    # --------------------------------------------------------
 
     if market_cap <= 10_000:
 
@@ -251,9 +367,9 @@ def calculate_score(
         score += 7
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # AGE
-    # ========================================================
+    # --------------------------------------------------------
 
     if age_minutes <= 5:
 
@@ -284,9 +400,9 @@ def calculate_score(
         score += 3
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # LIQUIDITY
-    # ========================================================
+    # --------------------------------------------------------
 
     if liquidity >= 20_000:
 
@@ -309,9 +425,9 @@ def calculate_score(
         score += 6
 
 
-    # ========================================================
-    # 5M VOLUME
-    # ========================================================
+    # --------------------------------------------------------
+    # VOLUME 5M
+    # --------------------------------------------------------
 
     if volume5m >= 20_000:
 
@@ -342,9 +458,9 @@ def calculate_score(
         score += 3
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # BUY PRESSURE
-    # ========================================================
+    # --------------------------------------------------------
 
     buy_pressure = get_buy_pressure(
         buys5m,
@@ -368,9 +484,9 @@ def calculate_score(
         score += 5
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # PRICE MOMENTUM
-    # ========================================================
+    # --------------------------------------------------------
 
     if price_change5m >= 50:
 
@@ -392,15 +508,10 @@ def calculate_score(
 
         score += 4
 
-    elif price_change5m < 0:
 
-        # Small negative movement gets no bonus.
-        pass
-
-
-    # ========================================================
+    # --------------------------------------------------------
     # 1H VOLUME
-    # ========================================================
+    # --------------------------------------------------------
 
     if volume1h >= 50_000:
 
@@ -415,9 +526,9 @@ def calculate_score(
         score += 4
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # MARKET CAP ACCELERATION
-    # ========================================================
+    # --------------------------------------------------------
 
     if previous_mc > 0:
 
@@ -450,9 +561,9 @@ def calculate_score(
             score += 5
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # VOLUME ACCELERATION
-    # ========================================================
+    # --------------------------------------------------------
 
     if previous_volume > 0:
 
@@ -481,9 +592,9 @@ def calculate_score(
             score += 4
 
 
-    # ========================================================
+    # --------------------------------------------------------
     # DUMP PENALTY
-    # ========================================================
+    # --------------------------------------------------------
 
     if price_change5m <= -30:
 
@@ -513,7 +624,7 @@ def calculate_score(
 
 
 # ============================================================
-# TELEGRAM ALERT
+# TELEGRAM
 # ============================================================
 
 def send_alert(
@@ -529,7 +640,9 @@ def send_alert(
     age_minutes,
     score,
     alert_type,
-    chart
+    chart,
+    mc_change=0,
+    volume_change=0
 ):
 
     buy_pressure = get_buy_pressure(
@@ -550,10 +663,12 @@ def send_alert(
 
 🟢 Buys: {buys5m}
 🔴 Sells: {sells5m}
-
 📊 Buy pressure: {buy_pressure:.0f}%
 
 🔥 Price 5m: {price_change5m:+.1f}%
+
+📈 MC change: {mc_change:+.1f}%
+⚡ Volume change: {volume_change:+.1f}%
 
 ⏱️ Age: {age_minutes:.1f} min
 
@@ -564,7 +679,7 @@ def send_alert(
 🔗 {chart}
 """
 
-    response = requests.post(
+    response = session.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
         data={
             "chat_id": chat_id,
@@ -591,23 +706,11 @@ def scan_once(
     print("================================")
 
 
-    # ========================================================
-    # GET PROFILES
-    # ========================================================
+    # --------------------------------------------------------
+    # DISCOVERY
+    # --------------------------------------------------------
 
-    try:
-
-        profiles = get_latest_profiles()
-
-    except Exception as e:
-
-        print(
-            f"PROFILE ERROR: "
-            f"{type(e).__name__}: {e}"
-        )
-
-        return 0
-
+    profiles = get_latest_profiles()
 
     addresses = []
 
@@ -641,9 +744,9 @@ def scan_once(
     )
 
 
-    # ========================================================
-    # GET PAIRS
-    # ========================================================
+    # --------------------------------------------------------
+    # PAIRS
+    # --------------------------------------------------------
 
     pairs = get_pairs(
         addresses
@@ -656,28 +759,25 @@ def scan_once(
     )
 
 
+    raydium_pairs = select_raydium_pairs(
+        pairs
+    )
+
+
+    print(
+        f"RAYDIUM PAIRS: "
+        f"{len(raydium_pairs)}"
+    )
+
+
     alerts_sent = 0
 
 
-    # ========================================================
-    # PROCESS PAIRS
-    # ========================================================
+    # --------------------------------------------------------
+    # PROCESS
+    # --------------------------------------------------------
 
-    for pair in pairs:
-
-        if pair.get(
-            "chainId"
-        ) != "solana":
-
-            continue
-
-
-        if pair.get(
-            "dexId"
-        ) != "raydium":
-
-            continue
-
+    for pair in raydium_pairs:
 
         base = pair.get(
             "baseToken",
@@ -699,44 +799,40 @@ def scan_once(
         )
 
 
-        # ====================================================
-        # METRICS
-        # ====================================================
-
-        market_cap = float(
+        market_cap = safe_float(
             pair.get(
                 "marketCap"
-            ) or 0
+            )
         )
 
 
-        liquidity = float(
+        liquidity = safe_float(
             pair.get(
                 "liquidity",
                 {}
             ).get(
                 "usd"
-            ) or 0
+            )
         )
 
 
-        volume = pair.get(
+        volume_data = pair.get(
             "volume",
             {}
         )
 
 
-        volume5m = float(
-            volume.get(
+        volume5m = safe_float(
+            volume_data.get(
                 "m5"
-            ) or 0
+            )
         )
 
 
-        volume1h = float(
-            volume.get(
+        volume1h = safe_float(
+            volume_data.get(
                 "h1"
-            ) or 0
+            )
         )
 
 
@@ -752,30 +848,30 @@ def scan_once(
         )
 
 
-        buys5m = int(
+        buys5m = safe_int(
             txns5m.get(
                 "buys"
-            ) or 0
+            )
         )
 
 
-        sells5m = int(
+        sells5m = safe_int(
             txns5m.get(
                 "sells"
-            ) or 0
+            )
         )
 
 
-        price_change = pair.get(
+        price_data = pair.get(
             "priceChange",
             {}
         )
 
 
-        price_change5m = float(
-            price_change.get(
+        price_change5m = safe_float(
+            price_data.get(
                 "m5"
-            ) or 0
+            )
         )
 
 
@@ -790,9 +886,9 @@ def scan_once(
         )
 
 
-        # ====================================================
-        # LOG
-        # ====================================================
+        # ----------------------------------------------------
+        # LOG EVERYTHING IMPORTANT
+        # ----------------------------------------------------
 
         print(
             f"CHECK ${symbol} | "
@@ -805,15 +901,14 @@ def scan_once(
         )
 
 
-        # ====================================================
+        # ----------------------------------------------------
         # BASIC FILTERS
-        # ====================================================
+        # ----------------------------------------------------
 
         if market_cap < MIN_MARKET_CAP:
 
             print(
-                f"REJECT ${symbol}: "
-                f"MC TOO LOW"
+                f"REJECT ${symbol}: MC TOO LOW"
             )
 
             continue
@@ -822,8 +917,7 @@ def scan_once(
         if market_cap > MAX_TRACKING_MC:
 
             print(
-                f"REJECT ${symbol}: "
-                f"MC TOO HIGH"
+                f"REJECT ${symbol}: MC TOO HIGH"
             )
 
             continue
@@ -859,9 +953,9 @@ def scan_once(
             continue
 
 
-        # ====================================================
+        # ----------------------------------------------------
         # HARD DUMP FILTER
-        # ====================================================
+        # ----------------------------------------------------
 
         if price_change5m <= MAX_5M_DROP:
 
@@ -874,9 +968,9 @@ def scan_once(
             continue
 
 
-        # ====================================================
+        # ----------------------------------------------------
         # BUY PRESSURE FILTER
-        # ====================================================
+        # ----------------------------------------------------
 
         if buy_pressure < MIN_BUY_PRESSURE:
 
@@ -889,9 +983,9 @@ def scan_once(
             continue
 
 
-        # ====================================================
+        # ----------------------------------------------------
         # PREVIOUS STATE
-        # ====================================================
+        # ----------------------------------------------------
 
         previous = watchlist.get(
             address,
@@ -899,25 +993,53 @@ def scan_once(
         )
 
 
-        previous_mc = float(
+        previous_mc = safe_float(
             previous.get(
-                "market_cap",
-                0
+                "market_cap"
             )
         )
 
 
-        previous_volume = float(
+        previous_volume = safe_float(
             previous.get(
-                "volume5m",
-                0
+                "volume5m"
             )
         )
 
 
-        # ====================================================
+        # ----------------------------------------------------
+        # CHANGES
+        # ----------------------------------------------------
+
+        mc_change = 0
+
+        if previous_mc > 0:
+
+            mc_change = (
+                (
+                    market_cap
+                    - previous_mc
+                )
+                / previous_mc
+            ) * 100
+
+
+        volume_change = 0
+
+        if previous_volume > 0:
+
+            volume_change = (
+                (
+                    volume5m
+                    - previous_volume
+                )
+                / previous_volume
+            ) * 100
+
+
+        # ----------------------------------------------------
         # SCORE
-        # ====================================================
+        # ----------------------------------------------------
 
         score = calculate_score(
             market_cap,
@@ -939,9 +1061,9 @@ def scan_once(
         )
 
 
-        # ====================================================
+        # ----------------------------------------------------
         # SAVE STATE
-        # ====================================================
+        # ----------------------------------------------------
 
         watchlist[address] = {
 
@@ -955,14 +1077,11 @@ def scan_once(
         }
 
 
-        # ====================================================
+        # ----------------------------------------------------
         # FIRST SIGHT
-        # ====================================================
+        # ----------------------------------------------------
 
         if previous_mc == 0:
-
-            # Do not call something above $100k
-            # "early first sight".
 
             if market_cap > MAX_FIRST_SIGHT_MC:
 
@@ -979,8 +1098,7 @@ def scan_once(
                 if address not in alerted_tokens:
 
                     print(
-                        f"🚨 "
-                        f"FIRST SIGHT ALERT: "
+                        f"🚨 FIRST SIGHT ALERT: "
                         f"${symbol}"
                     )
 
@@ -988,91 +1106,5 @@ def scan_once(
                     try:
 
                         send_alert(
-                            token,
-                            chat_id,
-                            symbol,
-                            market_cap,
-                            liquidity,
-                            volume5m,
-                            buys5m,
-                            sells5m,
-                            price_change5m,
-                            age_minutes,
-                            score,
-                            "FIRST SIGHT",
-                            pair.get(
-                                "url",
-                                ""
-                            )
-                        )
-
-
-                        alerted_tokens.add(
-                            address
-                        )
-
-
-                        alerts_sent += 1
-
-
-                    except Exception as e:
-
-                        print(
-                            f"TELEGRAM ERROR: "
-                            f"{e}"
-                        )
-
-
-            else:
-
-                print(
-                    f"TRACKING ${symbol}"
-                )
-
-
-            continue
-
-
-        # ====================================================
-        # MOMENTUM
-        # ====================================================
-
-        mc_change = 0
-
-
-        if previous_mc > 0:
-
-            mc_change = (
-                (
-                    market_cap
-                    - previous_mc
-                )
-                / previous_mc
-            ) * 100
-
-
-        volume_change = 0
-
-
-        if previous_volume > 0:
-
-            volume_change = (
-                (
-                    volume5m
-                    - previous_volume
-                )
-                / previous_volume
-            ) * 100
-
-
-        print(
-            f"MOMENTUM ${symbol} | "
-            f"MC={mc_change:+.1f}% | "
-            f"VOL={volume_change:+.1f}% | "
-            f"SCORE={score}"
-        )
-
-
-        # ====================================================
-        # MOMENTUM SIGNAL
-        # ===========================
+                            token=token,
+                                       
