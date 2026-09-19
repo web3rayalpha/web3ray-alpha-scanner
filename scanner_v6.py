@@ -16,9 +16,9 @@ NEW_POOLS_URL = (
     "networks/solana/new_pools"
 )
 
-# ------------------------------------------------------------
-# TARGET
-# ------------------------------------------------------------
+# ============================================================
+# TARGET SETTINGS
+# ============================================================
 
 MIN_MC = 5_000
 MAX_FIRST_SIGHT_MC = 15_000
@@ -37,9 +37,9 @@ MAX_5M_DROP = -15
 MIN_FIRST_SIGHT_SCORE = 60
 MIN_MOMENTUM_SCORE = 70
 
-# ------------------------------------------------------------
+# ============================================================
 # RUNTIME
-# ------------------------------------------------------------
+# ============================================================
 
 RUN_SECONDS = 240
 SCAN_INTERVAL_SECONDS = 45
@@ -55,7 +55,7 @@ NEW_POOL_PAGES = 1
 session = requests.Session()
 
 session.headers.update({
-    "Accept": "application/json;version=20230203",
+    "Accept": "application/json",
     "User-Agent": "Web3Ray-Alpha-Scanner/13.0"
 })
 
@@ -76,9 +76,7 @@ def safe_float(value, default=0.0):
     try:
         if value is None:
             return default
-
         return float(value)
-
     except Exception:
         return default
 
@@ -87,9 +85,7 @@ def safe_int(value, default=0):
     try:
         if value is None:
             return default
-
         return int(value)
-
     except Exception:
         return default
 
@@ -136,13 +132,14 @@ def get_age_minutes(created_at):
 
 def is_raydium_pool(pool, included):
     """
-    GeckoTerminal can expose Raydium variants with different
-    DEX IDs, e.g. Raydium / Raydium CLMM / Raydium CPMM.
+    Detect Raydium using several possible GeckoTerminal
+    representations.
 
-    We therefore check:
-      1. relationship DEX id
-      2. included DEX id
-      3. included DEX name
+    Accepts:
+      - raydium
+      - raydium-clmm
+      - raydium-cpmm
+      - any DEX id/name containing "raydium"
     """
 
     relationships = pool.get(
@@ -163,19 +160,11 @@ def is_raydium_pool(pool, included):
         )
     ).lower().strip()
 
-    # --------------------------------------------------------
-    # Direct relationship ID
-    # --------------------------------------------------------
-
-    if (
-        "raydium" in relationship_id
-    ):
+    # Direct relationship match.
+    if "raydium" in relationship_id:
         return True, relationship_id, relationship_id
 
-    # --------------------------------------------------------
-    # Find matching included DEX object
-    # --------------------------------------------------------
-
+    # Search included DEX records.
     for item in included:
 
         if item.get("type") != "dex":
@@ -188,7 +177,10 @@ def is_raydium_pool(pool, included):
             )
         ).lower().strip()
 
-        if item_id != relationship_id:
+        if (
+            relationship_id
+            and item_id != relationship_id
+        ):
             continue
 
         attributes = item.get(
@@ -302,9 +294,9 @@ def discover_new_raydium_pools():
 
         time.sleep(0.2)
 
-    # --------------------------------------------------------
-    # DEX DEBUG
-    # --------------------------------------------------------
+    # ========================================================
+    # DEBUG DEX IDs
+    # ========================================================
 
     dex_ids = []
     dex_names = []
@@ -386,12 +378,11 @@ def discover_new_raydium_pools():
         )
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # RAYDIUM FILTER
-    # --------------------------------------------------------
+    # ========================================================
 
     raydium = []
-
     seen = set()
 
     for pool in all_pools:
@@ -427,7 +418,8 @@ def discover_new_raydium_pools():
         print(
             f"RAYDIUM MATCH | "
             f"DEX_ID={dex_id} | "
-            f"DEX_NAME={dex_name or 'relationship match'}"
+            f"DEX_NAME="
+            f"{dex_name or 'relationship match'}"
         )
 
     return raydium
@@ -484,12 +476,6 @@ def parse_pool(pool):
             len("solana_"):
         ]
 
-    # Pool names are generally:
-    #
-    # TOKEN / SOL
-    #
-    # TOKEN / USDC
-    #
     symbol = str(
         pool_name
     ).split(
@@ -515,10 +501,8 @@ def parse_pool(pool):
         )
     )
 
-    # Some new microcaps don't have a
-    # verified market cap immediately.
-    #
-    # Use FDV only as a discovery proxy.
+    # New microcaps sometimes have no
+    # verified market cap yet.
     if market_cap <= 0:
         market_cap = fdv
 
@@ -879,29 +863,13 @@ def send_alert(
     volume_change=0
 ):
 
-    symbol = data[
-        "symbol"
-    ]
+    symbol = data["symbol"]
+    market_cap = data["market_cap"]
+    liquidity = data["liquidity"]
+    volume5m = data["volume5m"]
 
-    market_cap = data[
-        "market_cap"
-    ]
-
-    liquidity = data[
-        "liquidity"
-    ]
-
-    volume5m = data[
-        "volume5m"
-    ]
-
-    buys5m = data[
-        "buys5m"
-    ]
-
-    sells5m = data[
-        "sells5m"
-    ]
+    buys5m = data["buys5m"]
+    sells5m = data["sells5m"]
 
     buy_pressure = data[
         "buy_pressure"
@@ -996,11 +964,9 @@ def scan_once(
     print(
         "================================"
     )
-
     print(
         "WEB3RAY V13 — NEW POOL SCAN"
     )
-
     print(
         "================================"
     )
@@ -1065,4 +1031,25 @@ def scan_once(
             "price_change5m"
         ]
 
-        age_minutes
+        age_minutes = data[
+            "age_minutes"
+        ]
+
+        pool_address = data[
+            "pool_address"
+        ]
+
+        if not pool_address:
+            continue
+
+        print(
+            f"CHECK ${symbol} | "
+            f"MC=${market_cap:.0f} | "
+            f"LQ=${liquidity:.0f} | "
+            f"V5=${volume5m:.0f} | "
+            f"AGE={age_minutes:.1f}m | "
+            f"BUY={buy_pressure:.0f}% | "
+            f"P5={price_change5m:+.1f}%"
+        )
+
+        
