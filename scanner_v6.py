@@ -1,3 +1,4 @@
+import os
 import time
 from datetime import datetime, timezone
 
@@ -5,11 +6,11 @@ import requests
 
 
 # ============================================================
-# WEB3RAY V13
-# RAYDIUM EARLY POOL HUNTER
+# WEB3RAY ALPHA SCANNER
+# V14
 # ============================================================
 
-VERSION = "V13"
+VERSION = "V14"
 
 NEW_POOLS_URL = (
     "https://api.geckoterminal.com/api/v2/"
@@ -17,7 +18,7 @@ NEW_POOLS_URL = (
 )
 
 # ============================================================
-# TARGET SETTINGS
+# SETTINGS
 # ============================================================
 
 MIN_MC = 5_000
@@ -30,21 +31,14 @@ MAX_AGE_MINUTES = 30
 MIN_VOLUME_5M = 100
 MIN_BUY_PRESSURE = 55
 
-# Reject hard dumps.
 MAX_5M_DROP = -15
 
-# Alert thresholds.
 MIN_FIRST_SIGHT_SCORE = 60
 MIN_MOMENTUM_SCORE = 70
-
-# ============================================================
-# RUNTIME
-# ============================================================
 
 RUN_SECONDS = 240
 SCAN_INTERVAL_SECONDS = 45
 
-# Page 1 = newest pools.
 NEW_POOL_PAGES = 1
 
 
@@ -56,15 +50,16 @@ session = requests.Session()
 
 session.headers.update({
     "Accept": "application/json",
-    "User-Agent": "Web3Ray-Alpha-Scanner/13.0"
+    "User-Agent": "Web3Ray-Alpha-Scanner/14.0"
 })
 
 
 # ============================================================
-# STATE
+# MEMORY
 # ============================================================
 
 watchlist = {}
+
 alerted_tokens = set()
 
 
@@ -76,8 +71,10 @@ def safe_float(value, default=0.0):
     try:
         if value is None:
             return default
+
         return float(value)
-    except Exception:
+
+    except (TypeError, ValueError):
         return default
 
 
@@ -85,12 +82,19 @@ def safe_int(value, default=0):
     try:
         if value is None:
             return default
+
         return int(value)
-    except Exception:
+
+    except (TypeError, ValueError):
         return default
 
 
+# ============================================================
+# BUY PRESSURE
+# ============================================================
+
 def get_buy_pressure(buys, sells):
+
     total = buys + sells
 
     if total <= 0:
@@ -99,123 +103,46 @@ def get_buy_pressure(buys, sells):
     return (buys / total) * 100
 
 
+# ============================================================
+# TOKEN AGE
+# ============================================================
+
 def get_age_minutes(created_at):
+
     if not created_at:
         return 999999
 
     try:
+
         created = datetime.fromisoformat(
-            created_at.replace(
-                "Z",
-                "+00:00"
-            )
+            created_at.replace("Z", "+00:00")
         )
 
-        now = datetime.now(
-            timezone.utc
-        )
+        now = datetime.now(timezone.utc)
 
-        return max(
-            0,
-            (
-                now - created
-            ).total_seconds() / 60
-        )
+        age = (
+            now - created
+        ).total_seconds() / 60
+
+        return max(0, age)
 
     except Exception:
+
         return 999999
 
 
 # ============================================================
-# RAYDIUM DETECTION
-# ============================================================
-
-def is_raydium_pool(pool, included):
-    """
-    Detect Raydium using several possible GeckoTerminal
-    representations.
-
-    Accepts:
-      - raydium
-      - raydium-clmm
-      - raydium-cpmm
-      - any DEX id/name containing "raydium"
-    """
-
-    relationships = pool.get(
-        "relationships",
-        {}
-    )
-
-    dex_relationship = (
-        relationships
-        .get("dex", {})
-        .get("data", {})
-    )
-
-    relationship_id = str(
-        dex_relationship.get(
-            "id",
-            ""
-        )
-    ).lower().strip()
-
-    # Direct relationship match.
-    if "raydium" in relationship_id:
-        return True, relationship_id, relationship_id
-
-    # Search included DEX records.
-    for item in included:
-
-        if item.get("type") != "dex":
-            continue
-
-        item_id = str(
-            item.get(
-                "id",
-                ""
-            )
-        ).lower().strip()
-
-        if (
-            relationship_id
-            and item_id != relationship_id
-        ):
-            continue
-
-        attributes = item.get(
-            "attributes",
-            {}
-        )
-
-        dex_name = str(
-            attributes.get(
-                "name",
-                ""
-            )
-        ).lower().strip()
-
-        if "raydium" in dex_name:
-            return True, item_id, dex_name
-
-    return False, relationship_id, ""
-
-
-# ============================================================
-# DISCOVERY
+# GET NEW POOLS
 # ============================================================
 
 def get_new_pools(page=1):
+
     try:
 
         response = session.get(
             NEW_POOLS_URL,
             params={
-                "include": (
-                    "base_token,"
-                    "quote_token,"
-                    "dex"
-                ),
+                "include": "base_token,quote_token,dex",
                 "page": page
             },
             timeout=20
@@ -225,32 +152,17 @@ def get_new_pools(page=1):
 
         data = response.json()
 
-        if not isinstance(
-            data,
-            dict
-        ):
+        if not isinstance(data, dict):
             return [], []
 
-        pools = data.get(
-            "data",
-            []
-        )
+        pools = data.get("data", [])
 
-        included = data.get(
-            "included",
-            []
-        )
+        included = data.get("included", [])
 
-        if not isinstance(
-            pools,
-            list
-        ):
+        if not isinstance(pools, list):
             pools = []
 
-        if not isinstance(
-            included,
-            list
-        ):
+        if not isinstance(included, list):
             included = []
 
         return pools, included
@@ -265,70 +177,45 @@ def get_new_pools(page=1):
         return [], []
 
 
-def discover_new_raydium_pools():
+# ============================================================
+# CHECK RAYDIUM
+# ============================================================
 
-    all_pools = []
-    all_included = []
+def is_raydium_pool(pool, included):
 
-    for page in range(
-        1,
-        NEW_POOL_PAGES + 1
-    ):
+    relationships = pool.get(
+        "relationships",
+        {}
+    )
 
-        pools, included = (
-            get_new_pools(page)
-        )
+    dex_data = (
+        relationships
+        .get("dex", {})
+        .get("data", {})
+    )
 
-        print(
-            f"NEW POOLS PAGE {page}: "
-            f"{len(pools)}"
-        )
+    dex_id = str(
+        dex_data.get("id", "")
+    ).lower().strip()
 
-        all_pools.extend(
-            pools
-        )
+    # Direct relationship match
 
-        all_included.extend(
-            included
-        )
+    if "raydium" in dex_id:
 
-        time.sleep(0.2)
+        return True
 
-    # ========================================================
-    # DEBUG DEX IDs
-    # ========================================================
+    # Included DEX lookup
 
-    dex_ids = []
-    dex_names = []
-
-    for pool in all_pools:
-
-        relationships = pool.get(
-            "relationships",
-            {}
-        )
-
-        dex_data = (
-            relationships
-            .get("dex", {})
-            .get("data", {})
-        )
-
-        dex_id = str(
-            dex_data.get(
-                "id",
-                ""
-            )
-        ).strip()
-
-        if dex_id:
-            dex_ids.append(
-                dex_id
-            )
-
-    for item in all_included:
+    for item in included:
 
         if item.get("type") != "dex":
+            continue
+
+        item_id = str(
+            item.get("id", "")
+        ).lower().strip()
+
+        if dex_id and item_id != dex_id:
             continue
 
         attributes = item.get(
@@ -336,97 +223,82 @@ def discover_new_raydium_pools():
             {}
         )
 
-        name = str(
-            attributes.get(
-                "name",
-                ""
-            )
-        ).strip()
+        dex_name = str(
+            attributes.get("name", "")
+        ).lower().strip()
 
-        if name:
-            dex_names.append(
-                name
-            )
+        if "raydium" in dex_name:
 
-    unique_dex_ids = sorted(
-        set(dex_ids)
-    )
+            return True
 
-    unique_dex_names = sorted(
-        set(dex_names)
-    )
+    return False
 
-    print(
-        "DEX IDS FOUND: "
-        + (
-            ", ".join(
-                unique_dex_ids
-            )
-            if unique_dex_ids
-            else "NONE"
+
+# ============================================================
+# DISCOVER RAYDIUM POOLS
+# ============================================================
+
+def discover_new_raydium_pools():
+
+    all_pools = []
+
+    all_included = []
+
+    for page in range(
+        1,
+        NEW_POOL_PAGES + 1
+    ):
+
+        pools, included = get_new_pools(
+            page
         )
-    )
 
-    print(
-        "DEX NAMES FOUND: "
-        + (
-            ", ".join(
-                unique_dex_names
-            )
-            if unique_dex_names
-            else "NONE"
+        print(
+            f"NEW POOLS PAGE {page}: "
+            f"{len(pools)}"
         )
-    )
 
-    # ========================================================
-    # RAYDIUM FILTER
-    # ========================================================
+        all_pools.extend(pools)
 
-    raydium = []
+        all_included.extend(included)
+
+        time.sleep(0.2)
+
+    raydium_pools = []
+
     seen = set()
 
     for pool in all_pools:
 
         pool_id = str(
-            pool.get(
-                "id",
-                ""
-            )
+            pool.get("id", "")
         )
+
+        if not pool_id:
+            continue
 
         if pool_id in seen:
             continue
 
-        seen.add(
-            pool_id
-        )
+        seen.add(pool_id)
 
-        is_ray, dex_id, dex_name = (
-            is_raydium_pool(
-                pool,
-                all_included
-            )
-        )
+        if is_raydium_pool(
+            pool,
+            all_included
+        ):
 
-        if not is_ray:
-            continue
+            raydium_pools.append(pool)
 
-        raydium.append(
-            pool
-        )
+    print(
+        f"RAYDIUM NEW POOLS: "
+        f"{len(raydium_pools)}"
+    )
 
-        print(
-            f"RAYDIUM MATCH | "
-            f"DEX_ID={dex_id} | "
-            f"DEX_NAME="
-            f"{dex_name or 'relationship match'}"
-        )
-
-    return raydium
+    return raydium_pools
 
 
 # ============================================================
-# POOL PARSING
+# PARSE POOL
 # ============================================================
 
 def parse_pool(pool):
@@ -441,22 +313,14 @@ def parse_pool(pool):
         {}
     )
 
-    # --------------------------------------------------------
-    # POOL
-    # --------------------------------------------------------
+    # Pool address
 
     pool_address = attributes.get(
-        "address"
+        "address",
+        ""
     )
 
-    pool_name = attributes.get(
-        "name",
-        "UNKNOWN"
-    )
-
-    # --------------------------------------------------------
-    # BASE TOKEN
-    # --------------------------------------------------------
+    # Token address
 
     base_token = (
         relationships
@@ -464,30 +328,37 @@ def parse_pool(pool):
         .get("data", {})
     )
 
-    token_address = base_token.get(
-        "id",
-        ""
+    token_address = str(
+        base_token.get("id", "")
     )
 
     if token_address.startswith(
         "solana_"
     ):
+
         token_address = token_address[
             len("solana_"):
         ]
 
-    symbol = str(
+    # Symbol
+
+    pool_name = str(
+        attributes.get(
+            "name",
+            "UNKNOWN"
+        )
+    )
+
+    symbol = (
         pool_name
-    ).split(
-        " / "
-    )[0].strip()
+        .split(" / ")[0]
+        .strip()
+    )
 
     if not symbol:
         symbol = "UNKNOWN"
 
-    # --------------------------------------------------------
-    # MARKET CAP / FDV
-    # --------------------------------------------------------
+    # Market cap
 
     market_cap = safe_float(
         attributes.get(
@@ -501,14 +372,11 @@ def parse_pool(pool):
         )
     )
 
-    # New microcaps sometimes have no
-    # verified market cap yet.
     if market_cap <= 0:
+
         market_cap = fdv
 
-    # --------------------------------------------------------
-    # LIQUIDITY
-    # --------------------------------------------------------
+    # Liquidity
 
     liquidity = safe_float(
         attributes.get(
@@ -516,9 +384,7 @@ def parse_pool(pool):
         )
     )
 
-    # --------------------------------------------------------
-    # VOLUME
-    # --------------------------------------------------------
+    # Volume
 
     volume_data = attributes.get(
         "volume_usd",
@@ -526,20 +392,14 @@ def parse_pool(pool):
     )
 
     volume5m = safe_float(
-        volume_data.get(
-            "m5"
-        )
+        volume_data.get("m5")
     )
 
     volume1h = safe_float(
-        volume_data.get(
-            "h1"
-        )
+        volume_data.get("h1")
     )
 
-    # --------------------------------------------------------
-    # PRICE CHANGE
-    # --------------------------------------------------------
+    # Price change
 
     price_data = attributes.get(
         "price_change_percentage",
@@ -547,20 +407,14 @@ def parse_pool(pool):
     )
 
     price_change5m = safe_float(
-        price_data.get(
-            "m5"
-        )
+        price_data.get("m5")
     )
 
     price_change1h = safe_float(
-        price_data.get(
-            "h1"
-        )
+        price_data.get("h1")
     )
 
-    # --------------------------------------------------------
-    # TRANSACTIONS
-    # --------------------------------------------------------
+    # Transactions
 
     transactions = attributes.get(
         "transactions",
@@ -573,15 +427,11 @@ def parse_pool(pool):
     )
 
     buys5m = safe_int(
-        tx5m.get(
-            "buys"
-        )
+        tx5m.get("buys")
     )
 
     sells5m = safe_int(
-        tx5m.get(
-            "sells"
-        )
+        tx5m.get("sells")
     )
 
     buy_pressure = get_buy_pressure(
@@ -589,39 +439,52 @@ def parse_pool(pool):
         sells5m
     )
 
-    # --------------------------------------------------------
-    # AGE
-    # --------------------------------------------------------
+    # Age
 
     created_at = attributes.get(
         "pool_created_at"
     )
 
-    age_minutes = get_age_minutes(
+    age = get_age_minutes(
         created_at
     )
 
     return {
+
         "pool_address": pool_address,
+
         "token_address": token_address,
+
         "symbol": symbol,
+
         "market_cap": market_cap,
+
         "fdv": fdv,
+
         "liquidity": liquidity,
+
         "volume5m": volume5m,
+
         "volume1h": volume1h,
+
         "price_change5m": price_change5m,
+
         "price_change1h": price_change1h,
+
         "buys5m": buys5m,
+
         "sells5m": sells5m,
+
         "buy_pressure": buy_pressure,
-        "age_minutes": age_minutes,
+
+        "age_minutes": age,
+
         "created_at": created_at
     }
 
 
 # ============================================================
-# SCORING
+# SCORE
 # ============================================================
 
 def calculate_score(
@@ -639,9 +502,7 @@ def calculate_score(
 
     score = 0
 
-    # --------------------------------------------------------
-    # MARKET CAP
-    # --------------------------------------------------------
+    # Market cap
 
     if market_cap <= 7_500:
         score += 30
@@ -664,9 +525,7 @@ def calculate_score(
     elif market_cap <= 75_000:
         score += 5
 
-    # --------------------------------------------------------
-    # AGE
-    # --------------------------------------------------------
+    # Age
 
     if age_minutes <= 5:
         score += 25
@@ -686,9 +545,7 @@ def calculate_score(
     elif age_minutes <= 30:
         score += 7
 
-    # --------------------------------------------------------
-    # LIQUIDITY
-    # --------------------------------------------------------
+    # Liquidity
 
     if liquidity >= 20_000:
         score += 15
@@ -705,9 +562,7 @@ def calculate_score(
     elif liquidity >= 1_000:
         score += 5
 
-    # --------------------------------------------------------
-    # 5M VOLUME
-    # --------------------------------------------------------
+    # Volume
 
     if volume5m >= 20_000:
         score += 20
@@ -730,9 +585,7 @@ def calculate_score(
     elif volume5m >= 100:
         score += 3
 
-    # --------------------------------------------------------
-    # BUY PRESSURE
-    # --------------------------------------------------------
+    # Buy pressure
 
     buy_pressure = get_buy_pressure(
         buys5m,
@@ -754,9 +607,7 @@ def calculate_score(
     elif buy_pressure >= 55:
         score += 4
 
-    # --------------------------------------------------------
-    # PRICE MOMENTUM
-    # --------------------------------------------------------
+    # Price momentum
 
     if price_change5m >= 50:
         score += 15
@@ -773,9 +624,7 @@ def calculate_score(
     elif price_change5m >= 5:
         score += 4
 
-    # --------------------------------------------------------
-    # 1H VOLUME
-    # --------------------------------------------------------
+    # 1h volume
 
     if volume1h >= 50_000:
         score += 8
@@ -786,9 +635,7 @@ def calculate_score(
     elif volume1h >= 10_000:
         score += 4
 
-    # --------------------------------------------------------
-    # MC ACCELERATION
-    # --------------------------------------------------------
+    # MC growth
 
     if mc_change >= 100:
         score += 20
@@ -805,9 +652,7 @@ def calculate_score(
     elif mc_change >= 10:
         score += 5
 
-    # --------------------------------------------------------
-    # VOLUME ACCELERATION
-    # --------------------------------------------------------
+    # Volume growth
 
     if volume_change >= 100:
         score += 15
@@ -821,9 +666,7 @@ def calculate_score(
     elif volume_change >= 10:
         score += 4
 
-    # --------------------------------------------------------
-    # DUMP PENALTY
-    # --------------------------------------------------------
+    # Dump penalty
 
     if price_change5m <= -30:
         score -= 35
@@ -850,7 +693,7 @@ def calculate_score(
 
 
 # ============================================================
-# TELEGRAM
+# TELEGRAM ALERT
 # ============================================================
 
 def send_alert(
@@ -864,69 +707,42 @@ def send_alert(
 ):
 
     symbol = data["symbol"]
-    market_cap = data["market_cap"]
-    liquidity = data["liquidity"]
-    volume5m = data["volume5m"]
 
-    buys5m = data["buys5m"]
-    sells5m = data["sells5m"]
-
-    buy_pressure = data[
-        "buy_pressure"
-    ]
-
-    price_change5m = data[
-        "price_change5m"
-    ]
-
-    age_minutes = data[
-        "age_minutes"
-    ]
-
-    pool_address = data[
-        "pool_address"
-    ]
-
-    chart = (
-        "https://dexscreener.com/"
-        f"solana/{pool_address}"
+    headline = (
+        "🚨 WEB3RAY V14 — EARLY DISCOVERY"
+        if alert_type == "FIRST SIGHT"
+        else
+        "🚀 WEB3RAY V14 — MOMENTUM CONFIRMED"
     )
 
-    if alert_type == "FIRST SIGHT":
+    chart = (
+        "https://dexscreener.com/solana/"
+        f"{data['pool_address']}"
+    )
 
-        headline = (
-            "🚨 WEB3RAY V13 — "
-            "EARLY DISCOVERY"
-        )
-
-    else:
-
-        headline = (
-            "🚀 WEB3RAY V13 — "
-            "MOMENTUM CONFIRMED"
-        )
-
-    message = f"""{headline}
+    message = f"""
+{headline}
 
 ⭐ Score: {score}/100
 
 🪙 ${symbol}
 
-📊 MC: ${market_cap:,.0f}
-💧 Liquidity: ${liquidity:,.0f}
+📊 MC: ${data["market_cap"]:,.0f}
+💧 Liquidity: ${data["liquidity"]:,.0f}
 
-📈 Volume 5m: ${volume5m:,.0f}
+📈 Volume 5m: ${data["volume5m"]:,.0f}
 
-🟢 Buys: {buys5m}
-🔴 Sells: {sells5m}
-📊 Buy pressure: {buy_pressure:.0f}%
+🟢 Buys: {data["buys5m"]}
+🔴 Sells: {data["sells5m"]}
 
-🔥 Price 5m: {price_change5m:+.1f}%
+📊 Buy pressure: {data["buy_pressure"]:.0f}%
+
+🔥 Price 5m: {data["price_change5m"]:+.1f}%
 
 📈 MC change: {mc_change:+.1f}%
 ⚡ Volume change: {volume_change:+.1f}%
 
-⏱️ Pool age: {age_minutes:.1f} min
+⏱️ Pool age: {data["age_minutes"]:.1f} min
 
 🎯 Target zone:
 $5K–$15K
@@ -934,7 +750,7 @@ $5K–$15K
 ⚠️ Signal only — DYOR.
 
 🔗 {chart}
-"""
+""".strip()
 
     response = session.post(
         (
@@ -945,14 +761,14 @@ $5K–$15K
             "chat_id": chat_id,
             "text": message
         },
-        timeout=10
+        timeout=15
     )
 
     response.raise_for_status()
 
 
 # ============================================================
-# SINGLE SCAN
+# SCAN ONCE
 # ============================================================
 
 def scan_once(
@@ -964,21 +780,16 @@ def scan_once(
     print(
         "================================"
     )
+
     print(
-        "WEB3RAY V13 — NEW POOL SCAN"
+        "WEB3RAY V14 — SCAN"
     )
+
     print(
         "================================"
     )
 
-    pools = (
-        discover_new_raydium_pools()
-    )
-
-    print(
-        f"RAYDIUM NEW POOLS: "
-        f"{len(pools)}"
-    )
+    pools = discover_new_raydium_pools()
 
     alerts_sent = 0
 
@@ -999,9 +810,7 @@ def scan_once(
 
             continue
 
-        symbol = data[
-            "symbol"
-        ]
+        symbol = data["symbol"]
 
         market_cap = data[
             "market_cap"
@@ -1013,14 +822,6 @@ def scan_once(
 
         volume5m = data[
             "volume5m"
-        ]
-
-        buys5m = data[
-            "buys5m"
-        ]
-
-        sells5m = data[
-            "sells5m"
         ]
 
         buy_pressure = data[
@@ -1052,4 +853,262 @@ def scan_once(
             f"P5={price_change5m:+.1f}%"
         )
 
-        
+        # ====================================================
+        # HARD FILTERS
+        # ====================================================
+
+        if market_cap < MIN_MC:
+
+            print(
+                f"REJECT ${symbol}: "
+                "MC TOO LOW"
+            )
+
+            continue
+
+        if market_cap > MAX_TRACKING_MC:
+
+            print(
+                f"REJECT ${symbol}: "
+                "MC TOO HIGH"
+            )
+
+            continue
+
+        if liquidity < MIN_LIQUIDITY:
+
+            print(
+                f"REJECT ${symbol}: "
+                "LIQUIDITY TOO LOW"
+            )
+
+            continue
+
+        if age_minutes > MAX_AGE_MINUTES:
+
+            print(
+                f"REJECT ${symbol}: "
+                "TOO OLD"
+            )
+
+            continue
+
+        if volume5m < MIN_VOLUME_5M:
+
+            print(
+                f"REJECT ${symbol}: "
+                "LOW VOLUME"
+            )
+
+            continue
+
+        if price_change5m <= MAX_5M_DROP:
+
+            print(
+                f"REJECT ${symbol}: "
+                "5M DUMP"
+            )
+
+            continue
+
+        if buy_pressure < MIN_BUY_PRESSURE:
+
+            print(
+                f"REJECT ${symbol}: "
+                "WEAK BUY PRESSURE"
+            )
+
+            continue
+
+        # ====================================================
+        # TRACKING
+        # ====================================================
+
+        key = (
+            data["token_address"]
+            or pool_address
+        )
+
+        previous = watchlist.get(
+            key,
+            {}
+        )
+
+        previous_mc = safe_float(
+            previous.get(
+                "market_cap"
+            )
+        )
+
+        previous_volume = safe_float(
+            previous.get(
+                "volume5m"
+            )
+        )
+
+        # MC change
+
+        mc_change = 0.0
+
+        if previous_mc > 0:
+
+            mc_change = (
+                (
+                    market_cap
+                    - previous_mc
+                )
+                / previous_mc
+            ) * 100
+
+        # Volume change
+
+        volume_change = 0.0
+
+        if previous_volume > 0:
+
+            volume_change = (
+                (
+                    volume5m
+                    - previous_volume
+                )
+                / previous_volume
+            ) * 100
+
+        # ====================================================
+        # SCORE
+        # ====================================================
+
+        total_score = calculate_score(
+            market_cap=market_cap,
+            liquidity=liquidity,
+            volume5m=volume5m,
+            volume1h=data["volume1h"],
+            buys5m=data["buys5m"],
+            sells5m=data["sells5m"],
+            price_change5m=price_change5m,
+            age_minutes=age_minutes,
+            mc_change=mc_change,
+            volume_change=volume_change
+        )
+
+        print(
+            f"SCORE ${symbol}: "
+            f"{total_score}/100"
+        )
+
+        # Update tracking memory
+
+        watchlist[key] = {
+            "market_cap": market_cap,
+            "volume5m": volume5m,
+            "liquidity": liquidity,
+            "timestamp": time.time()
+        }
+
+        # ====================================================
+        # FIRST SIGHT
+        # ====================================================
+
+        if previous_mc <= 0:
+
+            if market_cap > MAX_FIRST_SIGHT_MC:
+
+                print(
+                    f"SKIP ${symbol}: "
+                    "ABOVE FIRST-SIGHT MC"
+                )
+
+                continue
+
+            if total_score < MIN_FIRST_SIGHT_SCORE:
+
+                print(
+                    f"TRACKING ${symbol}: "
+                    f"SCORE {total_score}"
+                )
+
+                continue
+
+            if key in alerted_tokens:
+
+                continue
+
+            print(
+                f"🚨 EARLY DISCOVERY: "
+                f"${symbol}"
+            )
+
+            try:
+
+                send_alert(
+                    token=token,
+                    chat_id=chat_id,
+                    data=data,
+                    score=total_score,
+                    alert_type="FIRST SIGHT"
+                )
+
+                alerted_tokens.add(
+                    key
+                )
+
+                alerts_sent += 1
+
+            except Exception as e:
+
+                print(
+                    f"TELEGRAM ERROR: "
+                    f"{type(e).__name__}: {e}"
+                )
+
+            continue
+
+        # ====================================================
+        # MOMENTUM
+        # ====================================================
+
+        print(
+            f"MOMENTUM ${symbol} | "
+            f"MC={mc_change:+.1f}% | "
+            f"VOL={volume_change:+.1f}% | "
+            f"SCORE={total_score}"
+        )
+
+        if total_score < MIN_MOMENTUM_SCORE:
+
+            continue
+
+        strong_mc_move = (
+            mc_change >= 15
+        )
+
+        strong_volume_move = (
+            volume_change >= 40
+        )
+
+        strong_price_move = (
+            price_change5m >= 10
+        )
+
+        if not (
+            strong_mc_move
+            or strong_volume_move
+            or strong_price_move
+        ):
+
+            continue
+
+        if key in alerted_tokens:
+
+            continue
+
+        print(
+            f"🚀 MOMENTUM CONFIRMED: "
+            f"${symbol}"
+        )
+
+        try:
+
+            send_alert(
+                token=token,
+                chat_id=
