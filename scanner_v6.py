@@ -1,982 +1,597 @@
+import os
 import time
+import logging
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Set
 
 import requests
 
+# ----------------------------- CONFIG ---------------------------------
 
-# ============================================================
-# WEB3RAY V15
-# RAYDIUM EARLY POOL HUNTER
-# ============================================================
-
-VERSION = "V15"
-
-# ============================================================
-# TARGET SETTINGS
-# ============================================================
-
-MIN_MC = 5_000
-MAX_FIRST_SIGHT_MC = 15_000
-MAX_TRACKING_MC = 100_000
-
-MIN_LIQUIDITY = 1_000
-MIN_VOLUME_5M = 100
-MIN_BUY_PRESSURE = 55
-
-MAX_5M_DROP = -15
-MAX_AGE_MINUTES = 30
-
-MIN_FIRST_SIGHT_SCORE = 55
-MIN_MOMENTUM_SCORE = 70
-
-# ============================================================
-# RUNTIME
-# ============================================================
-
-RUN_SECONDS = 240
-SCAN_INTERVAL_SECONDS = 30
-
-# More pages = better chance of seeing new pools.
-NEW_POOL_PAGES = 3
-
-# ============================================================
-# APIS
-# ============================================================
+NETWORK = "solana"
 
 GECKO_NEW_POOLS_URL = (
-    "https://api.geckoterminal.com/api/v2/"
-    "networks/solana/new_pools"
+    "https://api.geckoterminal.com/api/v2/networks/solana/new_pools"
+)
+DEXSCREENER_TOKEN_URL = (
+    "https://api.dexscreener.com/latest/dex/tokens/{}"
+)
+TELEGRAM_URL = "https://api.telegram.org/bot{}/sendMessage"
+
+MIN_MARKET_CAP_USD = float(os.getenv("MIN_MARKET_CAP_USD", "5000"))
+MAX_MARKET_CAP_USD = float(os.getenv("MAX_MARKET_CAP_USD", "15000"))
+MIN_LIQUIDITY_USD = float(os.getenv("MIN_LIQUIDITY_USD", "3000"))
+MAX_POOL_AGE_MINUTES = int(os.getenv("MAX_POOL_AGE_MINUTES", "90"))
+MIN_VOLUME_5M_USD = float(os.getenv("MIN_VOLUME_5M_USD", "100"))
+MIN_TXNS_5M = int(os.getenv("MIN_TXNS_5M", "2"))
+SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "30"))
+RUN_SECONDS = int(os.getenv("RUN_SECONDS", "240"))
+GECKO_PAGES = int(os.getenv("GECKO_PAGES", "3"))
+MAX_ALERTS_PER_RUN = int(os.getenv("MAX_ALERTS_PER_RUN", "8"))
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
-DEXSCREENER_TOKEN_PAIRS_URL = (
-    "https://api.dexscreener.com/token-pairs/v1/solana/"
-)
+log = logging.getLogger("web3ray-scanner")
 
-# ============================================================
-# HTTP
-# ============================================================
-
-session = requests.Session()
-
-session.headers.update({
+SESSION = requests.Session()
+SESSION.headers.update({
+    "User-Agent": "Web3Ray-Alpha-Scanner/1.0",
     "Accept": "application/json",
-    "User-Agent": "Web3Ray-Alpha-Scanner/15.0",
 })
 
-# ============================================================
-# MEMORY
-# ============================================================
-
-watchlist = {}
-alerted_tokens = set()
+SEEN_POOL_IDS: Set[str] = set()
+ALERTED_TOKEN_ADDRESSES: Set[str] = set()
 
 
-# ============================================================
-# SAFE HELPERS
-# ============================================================
-
-def safe_float(value, default=0.0):
+def _number(value: Any, default: float = 0.0) -> float:
     try:
-        if value is None:
+        if value is None or value == "":
             return default
-
         return float(value)
-
     except (TypeError, ValueError):
         return default
 
 
-def safe_int(value, default=0):
+def _get_json(
+    url: str,
+    params: Optional[dict] = None,
+    timeout: int = 15,
+) -> Optional[dict]:
     try:
-        if value is None:
-            return default
+        response = SESSION.get(url, params=params, timeout=timeout)
 
-        return int(float(value))
-
-    except (TypeError, ValueError):
-        return default
-
-
-# ============================================================
-# BUY PRESSURE
-# ============================================================
-
-def get_buy_pressure(buys, sells):
-
-    total = buys + sells
-
-    if total <= 0:
-        return 0.0
-
-    return (buys / total) * 100.0
-
-
-# ============================================================
-# TOKEN AGE
-# ============================================================
-
-def get_age_minutes(created_at):
-
-    if not created_at:
-        return 999999.0
-
-    try:
-
-        value = str(created_at).replace(
-            "Z",
-            "+00:00"
-        )
-
-        created = datetime.fromisoformat(value)
-
-        if created.tzinfo is None:
-            created = created.replace(
-                tzinfo=timezone.utc
-            )
-
-        now = datetime.now(timezone.utc)
-
-        age = (
-            now - created
-        ).total_seconds() / 60.0
-
-        return max(0.0, age)
-
-    except Exception:
-        return 999999.0
-
-
-# ============================================================
-# GECKO NEW POOLS
-# ============================================================
-
-def get_new_pools(page=1):
-
-    try:
-
-        response = session.get(
-            GECKO_NEW_POOLS_URL,
-            params={
-                "include": (
-                    "base_token,"
-                    "quote_token,"
-                    "dex"
-                ),
-                "page": page,
-            },
-            timeout=20,
-        )
+        if response.status_code == 429:
+            log.warning("Rate limited by %s", url.split("/")[2])
+            return None
 
         response.raise_for_status()
+        data = response.json()
 
-        payload = response.json()
+        return data if isinstance(data, dict) else None
 
-        if not isinstance(payload, dict):
-            return [], []
+    except (requests.RequestException, ValueError) as exc:
+        log.warning(
+            "Request failed (%s): %s",
+            url.split("/")[2],
+            exc,
+        )
+        return None
 
-        pools = payload.get(
-            "data",
-            []
+
+def _fetch_new_pools() -> List[dict]:
+    pools: List[dict] = []
+
+    for page in range(1, max(1, GECKO_PAGES) + 1):
+        payload = _get_json(
+            GECKO_NEW_POOLS_URL,
+            params={"page": page},
         )
 
-        included = payload.get(
-            "included",
-            []
-        )
-
-        if not isinstance(pools, list):
-            pools = []
-
-        if not isinstance(included, list):
-            included = []
-
-        return pools, included
-
-    except Exception as exc:
-
-        print(
-            f"NEW POOLS ERROR | "
-            f"{type(exc).__name__}: {exc}"
-        )
-
-        return [], []
-
-
-# ============================================================
-# RAYDIUM DETECTION
-# ============================================================
-
-def is_raydium_pool(pool, included):
-
-    relationships = pool.get(
-        "relationships",
-        {}
-    )
-
-    dex_data = (
-        relationships
-        .get("dex", {})
-        .get("data", {})
-    )
-
-    dex_id = str(
-        dex_data.get(
-            "id",
-            ""
-        )
-    ).lower().strip()
-
-    # Direct match.
-    if "raydium" in dex_id:
-        return True
-
-    # Included DEX match.
-    for item in included:
-
-        if item.get("type") != "dex":
+        if not payload:
             continue
 
-        item_id = str(
-            item.get(
-                "id",
-                ""
-            )
-        ).lower().strip()
+        data = payload.get("data", [])
 
-        if dex_id and item_id != dex_id:
-            continue
-
-        attributes = item.get(
-            "attributes",
-            {}
-        )
-
-        dex_name = str(
-            attributes.get(
-                "name",
-                ""
-            )
-        ).lower().strip()
-
-        if "raydium" in dex_name:
-            return True
-
-    return False
-
-
-# ============================================================
-# DISCOVER RAYDIUM POOLS
-# ============================================================
-
-def discover_new_raydium_pools():
-
-    raydium_pools = []
-    seen = set()
-
-    for page in range(
-        1,
-        NEW_POOL_PAGES + 1
-    ):
-
-        pools, included = get_new_pools(
-            page
-        )
-
-        print(
-            f"NEW POOLS PAGE {page}: "
-            f"{len(pools)}"
-        )
-
-        for pool in pools:
-
-            pool_id = str(
-                pool.get(
-                    "id",
-                    ""
-                )
+        if isinstance(data, list):
+            pools.extend(
+                item for item in data if isinstance(item, dict)
             )
 
-            if not pool_id:
-                continue
+        time.sleep(0.25)
 
-            if pool_id in seen:
-                continue
-
-            seen.add(pool_id)
-
-            if is_raydium_pool(
-                pool,
-                included
-            ):
-                raydium_pools.append(
-                    pool
-                )
-
-        if page < NEW_POOL_PAGES:
-            time.sleep(0.25)
-
-    print(
-        f"RAYDIUM NEW POOLS: "
-        f"{len(raydium_pools)}"
-    )
-
-    return raydium_pools
+    return pools
 
 
-# ============================================================
-# PARSE GECKO POOL
-# ============================================================
-
-def parse_gecko_pool(pool):
-
-    attributes = pool.get(
-        "attributes",
-        {}
-    )
-
-    relationships = pool.get(
-        "relationships",
-        {}
-    )
-
-    # --------------------------------------------------------
-    # POOL
-    # --------------------------------------------------------
-
-    pool_address = str(
-        attributes.get(
-            "address",
-            ""
+def _relationship_address(pool: dict, key: str) -> str:
+    try:
+        value = str(
+            pool.get("relationships", {})
+            .get(key, {})
+            .get("data", {})
+            .get("id", "")
         )
-    ).strip()
 
-    # --------------------------------------------------------
-    # BASE TOKEN
-    # --------------------------------------------------------
+        if value.startswith("solana_"):
+            return value.split("_", 1)[1]
 
-    base_token = (
-        relationships
-        .get("base_token", {})
-        .get("data", {})
+        return value
+
+    except AttributeError:
+        return ""
+
+
+def _pool_record(item: dict) -> Optional[dict]:
+    attrs = item.get("attributes") or {}
+    pool_id = str(item.get("id") or "")
+
+    if not pool_id:
+        return None
+
+    dex_id = str(attrs.get("dex_id") or "").lower()
+
+    # Only Raydium pools.
+    if "raydium" not in dex_id:
+        return None
+
+    created_at = (
+        attrs.get("pool_created_at")
+        or attrs.get("created_at")
     )
 
-    token_address = str(
-        base_token.get(
-            "id",
-            ""
-        )
-    ).strip()
+    age_minutes = None
 
-    if token_address.startswith(
-        "solana_"
-    ):
-        token_address = token_address[7:]
+    if created_at:
+        try:
+            created = datetime.fromisoformat(
+                str(created_at).replace("Z", "+00:00")
+            )
 
-    # --------------------------------------------------------
-    # SYMBOL
-    # --------------------------------------------------------
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
 
-    pool_name = str(
-        attributes.get(
-            "name",
-            "UNKNOWN"
-        )
-    ).strip()
+            age_minutes = max(
+                0.0,
+                (
+                    datetime.now(timezone.utc)
+                    - created.astimezone(timezone.utc)
+                ).total_seconds() / 60,
+            )
 
-    symbol = (
-        pool_name
-        .split(" / ")[0]
-        .strip()
-    )
+        except (TypeError, ValueError):
+            age_minutes = None
 
-    if not symbol:
-        symbol = "UNKNOWN"
+    base_id = _relationship_address(item, "base_token")
+    quote_id = _relationship_address(item, "quote_token")
 
-    # --------------------------------------------------------
-    # MARKET CAP
-    # --------------------------------------------------------
+    if not base_id:
+        base_id = str(attrs.get("base_token_address") or "")
 
-    market_cap = safe_float(
-        attributes.get(
-            "market_cap_usd"
-        )
-    )
+    if not quote_id:
+        quote_id = str(attrs.get("quote_token_address") or "")
 
-    fdv = safe_float(
-        attributes.get(
-            "fdv_usd"
-        )
-    )
-
-    if market_cap <= 0:
-        market_cap = fdv
-
-    # --------------------------------------------------------
-    # LIQUIDITY
-    # --------------------------------------------------------
-
-    liquidity = safe_float(
-        attributes.get(
-            "reserve_in_usd"
-        )
-    )
-
-    # --------------------------------------------------------
-    # VOLUME
-    # --------------------------------------------------------
-
-    volume_data = attributes.get(
-        "volume_usd",
-        {}
-    )
-
-    if not isinstance(
-        volume_data,
-        dict
-    ):
-        volume_data = {}
-
-    volume5m = safe_float(
-        volume_data.get(
-            "m5"
-        )
-    )
-
-    volume1h = safe_float(
-        volume_data.get(
-            "h1"
-        )
-    )
-
-    # --------------------------------------------------------
-    # PRICE CHANGE
-    # --------------------------------------------------------
-
-    price_data = attributes.get(
-        "price_change_percentage",
-        {}
-    )
-
-    if not isinstance(
-        price_data,
-        dict
-    ):
-        price_data = {}
-
-    price_change5m = safe_float(
-        price_data.get(
-            "m5"
-        )
-    )
-
-    price_change1h = safe_float(
-        price_data.get(
-            "h1"
-        )
-    )
-
-    # --------------------------------------------------------
-    # TRANSACTIONS
-    # --------------------------------------------------------
-
-    transactions = attributes.get(
-        "transactions",
-        {}
-    )
-
-    if not isinstance(
-        transactions,
-        dict
-    ):
-        transactions = {}
-
-    tx5m = transactions.get(
-        "m5",
-        {}
-    )
-
-    if not isinstance(
-        tx5m,
-        dict
-    ):
-        tx5m = {}
-
-    buys5m = safe_int(
-        tx5m.get(
-            "buys"
-        )
-    )
-
-    sells5m = safe_int(
-        tx5m.get(
-            "sells"
-        )
-    )
-
-    buy_pressure = get_buy_pressure(
-        buys5m,
-        sells5m
-    )
-
-    # --------------------------------------------------------
-    # AGE
-    # --------------------------------------------------------
-
-    created_at = attributes.get(
-        "pool_created_at"
-    )
-
-    age_minutes = get_age_minutes(
-        created_at
-    )
+    volume_data = attrs.get("volume_usd") or {}
+    txn_data = attrs.get("transactions") or {}
 
     return {
-        "pool_address": pool_address,
-        "token_address": token_address,
-        "symbol": symbol,
-        "market_cap": market_cap,
-        "fdv": fdv,
-        "liquidity": liquidity,
-        "volume5m": volume5m,
-        "volume1h": volume1h,
-        "price_change5m": price_change5m,
-        "price_change1h": price_change1h,
-        "buys5m": buys5m,
-        "sells5m": sells5m,
-        "buy_pressure": buy_pressure,
+        "pool_id": pool_id,
+        "pool_address": str(
+            attrs.get("address") or pool_id.split("_")[-1]
+        ),
+        "name": str(attrs.get("name") or "Unknown pool"),
+        "dex_id": dex_id,
+        "created_at": created_at,
         "age_minutes": age_minutes,
+        "base_token": base_id,
+        "quote_token": quote_id,
+        "reserve_usd": _number(attrs.get("reserve_in_usd")),
+        "price_usd": _number(
+            attrs.get("base_token_price_usd")
+        ),
+        "volume_5m": _number(volume_data.get("m5")),
+        "txns_5m": txn_data.get("m5") or {},
     }
 
 
-# ============================================================
-# DEXSCREENER ENRICHMENT
-# ============================================================
+def _tx_count(txns: Any) -> int:
+    if not isinstance(txns, dict):
+        return 0
 
-def enrich_from_dexscreener(data):
+    buys = int(_number(txns.get("buys")))
+    sells = int(_number(txns.get("sells")))
 
-    token_address = data.get(
-        "token_address",
-        ""
-    )
+    return buys + sells
 
+
+def _dexscreener_pair(
+    token_address: str,
+    pool_address: str,
+) -> Optional[dict]:
     if not token_address:
-        return data
+        return None
 
-    original_pool = data.get(
-        "pool_address",
-        ""
+    payload = _get_json(
+        DEXSCREENER_TOKEN_URL.format(token_address)
     )
+
+    if not payload:
+        return None
+
+    pairs = payload.get("pairs") or []
+
+    if not isinstance(pairs, list):
+        return None
+
+    # Prefer the exact pool address.
+    for pair in pairs:
+        if not isinstance(pair, dict):
+            continue
+
+        if str(pair.get("chainId", "")).lower() != "solana":
+            continue
+
+        if (
+            pool_address
+            and str(pair.get("pairAddress", "")).lower()
+            == pool_address.lower()
+        ):
+            return pair
+
+    # Otherwise choose a Raydium pair on Solana.
+    for pair in pairs:
+        if not isinstance(pair, dict):
+            continue
+
+        if str(pair.get("chainId", "")).lower() != "solana":
+            continue
+
+        if "raydium" in str(pair.get("dexId", "")).lower():
+            return pair
+
+    return None
+
+
+def _market_data(pool: dict) -> dict:
+    token_address = pool.get("base_token", "")
+
+    pair = _dexscreener_pair(
+        token_address,
+        pool.get("pool_address", ""),
+    )
+
+    if not pair:
+        return {
+            "token_address": token_address,
+            "symbol": "UNKNOWN",
+            "token_name": pool.get("name", "Unknown token"),
+            "market_cap": 0.0,
+            "fdv": 0.0,
+            "valuation": 0.0,
+            "valuation_label": "MC unavailable",
+            "liquidity": pool.get("reserve_usd", 0.0),
+            "volume_5m": pool.get("volume_5m", 0.0),
+            "txns_5m": _tx_count(pool.get("txns_5m")),
+            "price_usd": pool.get("price_usd", 0.0),
+            "pair_url": (
+                "https://dexscreener.com/solana/"
+                + str(pool.get("pool_address", ""))
+            ),
+            "pair": None,
+        }
+
+    base = pair.get("baseToken") or {}
+
+    liquidity_data = pair.get("liquidity") or {}
+    volume_data = pair.get("volume") or {}
+    txn_data = pair.get("txns") or {}
+
+    liquidity = _number(
+        liquidity_data.get("usd"),
+        pool.get("reserve_usd", 0.0),
+    )
+
+    volume_5m = _number(
+        volume_data.get("m5"),
+        pool.get("volume_5m", 0.0),
+    )
+
+    txns_5m = _tx_count(txn_data.get("m5"))
+
+    market_cap = _number(pair.get("marketCap"))
+    fdv = _number(pair.get("fdv"))
+
+    # FDV is a fallback estimate, not the same as market cap.
+    if market_cap > 0:
+        valuation = market_cap
+        valuation_label = "MC"
+    elif fdv > 0:
+        valuation = fdv
+        valuation_label = "FDV estimate"
+    else:
+        valuation = 0.0
+        valuation_label = "MC unavailable"
+
+    pair_address = str(
+        pair.get("pairAddress")
+        or pool.get("pool_address", "")
+    )
+
+    return {
+        "token_address": str(
+            base.get("address") or token_address
+        ),
+        "symbol": str(base.get("symbol") or "UNKNOWN"),
+        "token_name": str(
+            base.get("name") or pool.get("name", "Unknown token")
+        ),
+        "market_cap": market_cap,
+        "fdv": fdv,
+        "valuation": valuation,
+        "valuation_label": valuation_label,
+        "liquidity": liquidity,
+        "volume_5m": volume_5m,
+        "txns_5m": txns_5m,
+        "price_usd": _number(
+            pair.get("priceUsd"),
+            pool.get("price_usd", 0.0),
+        ),
+        "pair_url": str(
+            pair.get("url")
+            or (
+                "https://dexscreener.com/solana/"
+                + pair_address
+            )
+        ),
+        "pair": pair,
+    }
+
+
+def _score(pool: dict, market: dict) -> tuple[int, List[str]]:
+    score = 0
+    reasons: List[str] = []
+
+    age = pool.get("age_minutes")
+    valuation = _number(market.get("valuation"))
+    liquidity = _number(market.get("liquidity"))
+    volume = _number(market.get("volume_5m"))
+    txns = int(market.get("txns_5m") or 0)
+
+    if age is not None and age <= 15:
+        score += 25
+        reasons.append("Pool age <= 15 minutes")
+
+    elif age is not None and age <= 45:
+        score += 15
+        reasons.append("Pool age <= 45 minutes")
+
+    elif age is not None:
+        score += 5
+        reasons.append("Pool age <= configured maximum")
+
+    if MIN_MARKET_CAP_USD <= valuation <= MAX_MARKET_CAP_USD:
+        score += 25
+        reasons.append(f"Early valuation ${valuation:,.0f}")
+
+    if liquidity >= MIN_LIQUIDITY_USD:
+        score += 20
+        reasons.append(f"Liquidity ${liquidity:,.0f}")
+
+    if volume >= MIN_VOLUME_5M_USD:
+        score += 15
+        reasons.append(f"5m volume ${volume:,.0f}")
+
+    if txns >= MIN_TXNS_5M:
+        score += 15
+        reasons.append(f"{txns} transactions in 5m")
+
+    return min(score, 100), reasons
+
+
+def _send_telegram(
+    token: str,
+    chat_id: str,
+    message: str,
+) -> bool:
+    url = TELEGRAM_URL.format(token)
 
     try:
-
-        response = session.get(
-            f"{DEXSCREENER_TOKEN_PAIRS_URL}"
-            f"{token_address}",
-            timeout=10,
+        response = SESSION.post(
+            url,
+            data={
+                "chat_id": chat_id,
+                "text": message,
+                "disable_web_page_preview": True,
+            },
+            timeout=15,
         )
 
-        if response.status_code != 200:
-            return data
+        if not response.ok:
+            log.warning(
+                "Telegram returned HTTP %s: %s",
+                response.status_code,
+                response.text[:250],
+            )
+            return False
 
-        pairs = response.json()
+        body = response.json()
 
-        if not isinstance(
-            pairs,
-            list
+        if not body.get("ok"):
+            log.warning("Telegram API error: %s", body)
+            return False
+
+        return True
+
+    except (requests.RequestException, ValueError) as exc:
+        log.warning("Telegram send failed: %s", exc)
+        return False
+
+
+def _alert_text(
+    pool: dict,
+    market: dict,
+    score: int,
+    reasons: List[str],
+) -> str:
+    age = pool.get("age_minutes")
+
+    if age is None:
+        age_text = "Unknown"
+    else:
+        age_text = f"{age:.0f} minutes"
+
+    valuation = _number(market.get("valuation"))
+    valuation_label = market.get(
+        "valuation_label",
+        "Valuation",
+    )
+
+    address = market.get("token_address") or "Unavailable"
+
+    if reasons:
+        reason_text = "\n".join(
+            f"• {reason}" for reason in reasons
+        )
+    else:
+        reason_text = "• Candidate needs manual review"
+
+    return (
+        "🛰️ WEB3RAY ALPHA SCANNER\n\n"
+        f"🪙 {market.get('token_name', 'Unknown')} "
+        f"(${market.get('symbol', 'UNKNOWN')})\n"
+        f"📊 {valuation_label}: ${valuation:,.0f}\n"
+        f"💧 Liquidity: "
+        f"${_number(market.get('liquidity')):,.0f}\n"
+        f"📈 5m volume: "
+        f"${_number(market.get('volume_5m')):,.0f}\n"
+        f"🔁 5m transactions: "
+        f"{int(market.get('txns_5m') or 0)}\n"
+        f"⏱️ Pool age: {age_text}\n"
+        f"⭐ Signal score: {score}/100\n\n"
+        f"Why it triggered:\n{reason_text}\n\n"
+        f"🔗 DexScreener: {market.get('pair_url', '')}\n"
+        f"📋 Token CA: {address}\n\n"
+        "⚠️ Signal only, not financial advice. Verify mint/freeze "
+        "authority, holders, liquidity, sells, and contract risks "
+        "yourself."
+    )
+
+
+def scan_once(token: str, chat_id: str) -> int:
+    items = _fetch_new_pools()
+
+    log.info("Fetched %d new-pool records", len(items))
+
+    alerts_sent = 0
+
+    for item in items:
+        pool = _pool_record(item)
+
+        if not pool:
+            continue
+
+        pool_id = pool["pool_id"]
+
+        if pool_id in SEEN_POOL_IDS:
+            continue
+
+        SEEN_POOL_IDS.add(pool_id)
+
+        age = pool.get("age_minutes")
+
+        if age is not None and age > MAX_POOL_AGE_MINUTES:
+            continue
+
+        market = _market_data(pool)
+        valuation = _number(market.get("valuation"))
+        liquidity = _number(market.get("liquidity"))
+
+        # Require a usable valuation in the target range.
+        if not (
+            MIN_MARKET_CAP_USD
+            <= valuation
+            <= MAX_MARKET_CAP_USD
         ):
-            return data
+            continue
 
-        raydium_pairs = []
+        if liquidity < MIN_LIQUIDITY_USD:
+            continue
 
-        for pair in pairs:
+        token_address = market.get("token_address")
 
-            dex_id = str(
-                pair.get(
-                    "dexId",
-                    ""
-                )
-            ).lower()
+        if not token_address:
+            continue
 
-            if dex_id == "raydium":
-                raydium_pairs.append(
-                    pair
-                )
+        if token_address in ALERTED_TOKEN_ADDRESSES:
+            continue
 
-        if not raydium_pairs:
-            return data
+        score, reasons = _score(pool, market)
 
-        # Prefer the exact discovered pool.
-        selected = None
+        if score < 45:
+            continue
 
-        for pair in raydium_pairs:
+        message = _alert_text(
+            pool,
+            market,
+            score,
+            reasons,
+        )
 
-            if str(
-                pair.get(
-                    "pairAddress",
-                    ""
-                )
-            ) == original_pool:
+        if _send_telegram(token, chat_id, message):
+            ALERTED_TOKEN_ADDRESSES.add(token_address)
+            alerts_sent += 1
 
-                selected = pair
+            log.info(
+                "Alert sent for %s (score %d)",
+                market.get("symbol"),
+                score,
+            )
+
+            if alerts_sent >= MAX_ALERTS_PER_RUN:
                 break
 
-        # Otherwise use the most liquid Raydium pair.
-        if selected is None:
+    log.info("Scan complete; alerts sent: %d", alerts_sent)
 
-            selected = max(
-                raydium_pairs,
-                key=lambda pair: safe_float(
-                    (
-                        pair.get(
-                            "liquidity",
-                            {}
-                        )
-                        or {}
-                    ).get(
-                        "usd"
-                    )
-                    if isinstance(
-                        pair.get(
-                            "liquidity",
-                            {}
-                        ),
-                        dict
-                    )
-                    else 0
-                )
+    return alerts_sent
+
+
+def get_new_tokens(token: str, chat_id: str) -> None:
+    """Entry point imported by main.py."""
+    if not token:
+        raise ValueError("Telegram BOT_TOKEN is missing")
+
+    if not chat_id:
+        raise ValueError("Telegram CHAT_ID is missing")
+
+    log.info("WEB3RAY ALPHA SCANNER STARTED")
+
+    log.info(
+        "Filters: valuation $%s-$%s | liquidity >= $%s | "
+        "max pool age %sm",
+        f"{MIN_MARKET_CAP_USD:,.0f}",
+        f"{MAX_MARKET_CAP_USD:,.0f}",
+        f"{MIN_LIQUIDITY_USD:,.0f}",
+        MAX_POOL_AGE_MINUTES,
+    )
+
+    start = time.monotonic()
+
+    while time.monotonic() - start < RUN_SECONDS:
+        try:
+            scan_once(token, chat_id)
+        except Exception:
+            log.exception(
+                "Unexpected scan error; continuing after a short pause"
             )
 
-        # ----------------------------------------------------
-        # LIQUIDITY
-        # ----------------------------------------------------
+        remaining = RUN_SECONDS - (time.monotonic() - start)
 
-        liquidity_data = selected.get(
-            "liquidity",
-            {}
+        if remaining <= 0:
+            break
+
+        time.sleep(
+            min(max(5, SCAN_INTERVAL_SECONDS), remaining)
         )
 
-        if isinstance(
-            liquidity_data,
-            dict
-        ):
-
-            ds_liquidity = safe_float(
-                liquidity_data.get(
-                    "usd"
-                )
-            )
-
-            if ds_liquidity > 0:
-                data["liquidity"] = (
-                    ds_liquidity
-                )
-
-        # ----------------------------------------------------
-        # MARKET CAP
-        # ----------------------------------------------------
-
-        ds_mc = safe_float(
-            selected.get(
-                "marketCap"
-            )
-        )
-
-        ds_fdv = safe_float(
-            selected.get(
-                "fdv"
-            )
-        )
-
-        if ds_mc > 0:
-            data["market_cap"] = ds_mc
-
-        elif (
-            ds_fdv > 0
-            and data["market_cap"] <= 0
-        ):
-            data["market_cap"] = ds_fdv
-
-        # ----------------------------------------------------
-        # VOLUME
-        # ----------------------------------------------------
-
-        volume = selected.get(
-            "volume",
-            {}
-        )
-
-        if isinstance(
-            volume,
-            dict
-        ):
-
-            ds_v5 = safe_float(
-                volume.get(
-                    "m5"
-                )
-            )
-
-            ds_v1h = safe_float(
-                volume.get(
-                    "h1"
-                )
-            )
-
-            if ds_v5 > 0:
-                data["volume5m"] = ds_v5
-
-            if ds_v1h > 0:
-                data["volume1h"] = ds_v1h
-
-        # ----------------------------------------------------
-        # PRICE CHANGE
-        # ----------------------------------------------------
-
-        changes = selected.get(
-            "priceChange",
-            {}
-        )
-
-        if isinstance(
-            changes,
-            dict
-        ):
-
-            data["price_change5m"] = (
-                safe_float(
-                    changes.get(
-                        "m5"
-                    )
-                )
-            )
-
-            data["price_change1h"] = (
-                safe_float(
-                    changes.get(
-                        "h1"
-                    )
-                )
-            )
-
-        # ----------------------------------------------------
-        # TRANSACTIONS
-        # ----------------------------------------------------
-
-        txns = selected.get(
-            "txns",
-            {}
-        )
-
-        if isinstance(
-            txns,
-            dict
-        ):
-
-            tx5 = txns.get(
-                "m5",
-                {}
-            )
-
-            if isinstance(
-                tx5,
-                dict
-            ):
-
-                data["buys5m"] = (
-                    safe_int(
-                        tx5.get(
-                            "buys"
-                        )
-                    )
-                )
-
-                data["sells5m"] = (
-                    safe_int(
-                        tx5.get(
-                            "sells"
-                        )
-                    )
-                )
-
-                data["buy_pressure"] = (
-                    get_buy_pressure(
-                        data["buys5m"],
-                        data["sells5m"]
-                    )
-                )
-
-        # IMPORTANT:
-        # Keep the original Gecko pool address
-        # and original age. This prevents enrichment
-        # from accidentally replacing the new pool
-        # with an older pair.
-
-    except Exception as exc:
-
-        print(
-            f"DEX ENRICH ERROR "
-            f"${data.get('symbol', '?')} | "
-            f"{type(exc).__name__}: {exc}"
-        )
-
-    return data
-
-
-# ============================================================
-# SCORE
-# ============================================================
-
-def calculate_score(
-    data,
-    mc_change,
-    volume_change
-):
-
-    score = 0
-
-    market_cap = data[
-        "market_cap"
-    ]
-
-    liquidity = data[
-        "liquidity"
-    ]
-
-    volume5m = data[
-        "volume5m"
-    ]
-
-    volume1h = data[
-        "volume1h"
-    ]
-
-    buy_pressure = data[
-        "buy_pressure"
-    ]
-
-    price_change5m = data[
-        "price_change5m"
-    ]
-
-    age_minutes = data[
-        "age_minutes"
-    ]
-
-    # --------------------------------------------------------
-    # MARKET CAP
-    # --------------------------------------------------------
-
-    if market_cap <= 7_500:
-        score += 30
-
-    elif market_cap <= 10_000:
-        score += 28
-
-    elif market_cap <= 15_000:
-        score += 25
-
-    elif market_cap <= 20_000:
-        score += 20
-
-    elif market_cap <= 35_000:
-        score += 15
-
-    elif market_cap <= 50_000:
-        score += 10
-
-    elif market_cap <= 75_000:
-        score += 5
-
-    # --------------------------------------------------------
-    # AGE
-    # --------------------------------------------------------
-
-    if age_minutes <= 5:
-        score += 25
-
-    elif age_minutes <= 10:
-        score += 23
-
-    elif age_minutes <= 15:
-        score += 20
-
-    elif age_minutes <= 20:
-        score += 17
-
-    elif age_minutes <= 25:
-        score += 12
-
-    elif age_minutes <= 30:
-        score += 7
-
-    # --------------------------------------------------------
-    # LIQUIDITY
-    # --------------------------------------------------------
-
-    if liquidity >= 20_000:
-        score += 15
-
-    elif liquidity >= 10_000:
-        score += 13
-
-    elif liquidity >= 5_000:
-        score += 11
-
-    elif liquidity >= 2_500:
-        score += 8
-
-    elif liquidity >= 1_000:
-        score += 5
-
-    # --------------------------------------------------------
-    # VOLUME 5M
-    # --------------------------------------------------------
-
-    if volume5m >= 20_000:
-        score += 20
-
-    elif volume5m >= 10_000:
-        score += 18
-
-    elif volume5m >= 5_000:
-        score += 15
-
-    elif volume5m >= 2_000:
-        score += 12
-
-    elif volume5m >= 1_000:
-        score += 9
-
-    elif volume5m >= 500:
-        score += 6
-
-    elif volume5m >= 100:
-        score += 3
-
-    # --------------------------------------------------------
-    # BUY PRESSURE
-    # --------------------------------------------------------
-
-    if buy_pressure >= 80:
-        score += 15
-
-    elif buy_pressure >= 70:
-        score += 13
-
-    elif buy_pressure >= 65:
-        score += 10
-
-    elif buy_pressure >= 60:
-        score += 7
-
-    elif buy_pressure >= 55:
-        score += 4
-
-    # --------------------------------------------------------
-    # PRICE MOMENTUM
-    # --------------------------------------------------------
-
-    if price_change5m >= 50:
-        score += 15
-
-    elif pr
+    log.info("WEB3RAY ALPHA SCANNER FINISHED")
